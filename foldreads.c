@@ -471,8 +471,8 @@ usage(char *argv0)
 	fprintf(stderr, " -o OUT.fq         Fastq output file [stdout].\n");
 	fprintf(stderr, " -m FILE           Metrics output file [stderr].\n");
 	fprintf(stderr, " -p SEQ            The hairpin SEQuence.\n");
-	fprintf(stderr, " -1 IN1.fq[.gz]    Fastq input file (paired or singled ended reads).\n");
-	fprintf(stderr, " -2 IN2.fq[.gz]    Secondary fastq input file (for paired reads only).\n");
+	fprintf(stderr, " -1 IN1.fq[.gz]    R1 fastq input file.\n");
+	fprintf(stderr, " -2 IN2.fq[.gz]    R2 fastq input file.\n");
 	exit(-1);
 }
 
