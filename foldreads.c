@@ -135,7 +135,6 @@ fold(const opt_t *opt, metrics_t *metrics,
 	int i, j;
 
 	if (len1 != len2) {
-		// TODO: may need gapped alignment
 		*_s_out = *_q_out = NULL;
 		metrics->palindrome_missing++;
 		return 0;
@@ -158,24 +157,28 @@ fold(const opt_t *opt, metrics_t *metrics,
 		exit(-2);
 	}
 
-	for (i=0, j=len2-1; i<len1 && j>=0; i++, j--) {
+	for (i=0; i<len1; i++) {
 		char c1 = s1[i];
-		char c2 = cmap[(int)s2[j]];
+		char c2 = s2[i]; //cmap[(int)s2[i]];
 
 		if (c1 == 'N' || c2 == 'N') {
+			/*
 			s_out[i] = c2 == 'N' ? c1 : c2;
-			q_out[i] = c2 == 'N' ? q1[i] : q2[j];
+			q_out[i] = c2 == 'N' ? q1[i] : q2[i];
+			*/
+			s_out[i] = 'N';
+			q_out[i] = '!';
 			continue;
 		}
 
-		int nt_idx = nt2int[(int)c1] << 2 | nt2int[(int)s2[j]];
+		int nt_idx = nt2int[(int)c1] << 2 | nt2int[(int)cmap[(int)c2]];
 
 		if (i < N_POS)
 			pairs_l[i][nt_idx]++;
-		if (j < N_POS)
-			pairs_r[j][nt_idx]++;
+		if (i > DS_DIST_FROM_END && i >= len1 - N_POS)
+			pairs_r[len1-i-1][nt_idx]++;
 
-		if (i > DS_DIST_FROM_END && j > DS_DIST_FROM_END)
+		if (i > DS_DIST_FROM_END && i < (len1-DS_DIST_FROM_END))
 			// Assume this position is not derived from a
 			// single strand overhang.
 			ds_pairs[nt_idx]++;
@@ -185,35 +188,25 @@ fold(const opt_t *opt, metrics_t *metrics,
 				// Unconverted C<->G.
 				c2 = tolower(c2);
 			s_out[i] = c2;
-			// TODO: combine quality scores
-			q_out[i] = max(q1[i], q2[j]);
+			q_out[i] = 'I';
 			match_total++;
 			ntcomp[nt2int[(int)c2]]++;
 		} else if ((c1 == 'T' && c2 == 'C') || (c1 == 'G' && c2 == 'A')) {
 			// Putatively damaged, or bisulfite converted.
 			s_out[i] = c2 == 'C' ? 'C' : 'G';
-			q_out[i] = c2 == 'C' ? q2[j] : q1[i];
+			q_out[i] = c2 == 'C' ? q2[i] : q1[i];
 			damage_total++;
 			ntcomp[nt2int[(int)s_out[i]]]++;
 		} else {
 			// Mismatch, probably sequencing error.
-
-			// Take the highest quality base.
-			// TODO: combine quality scores
-			if (q1[i] > q2[j]) {
-				s_out[i] = c1;
-				q_out[i] = q1[i];
-			} else {
-				s_out[i] = c2;
-				q_out[i] = q2[j];
-			}
+			s_out[i] = 'N';
+			q_out[i] = '!';
 			mm_total++;
 		}
 	}
 
 	if (mm_total > match_total) {
 		// This is not a palindromic sequence.
-		// TODO: may need gapped alignment
 		free(s_out);
 		free(q_out);
 		*_s_out = *_q_out = NULL;
@@ -245,58 +238,16 @@ fold(const opt_t *opt, metrics_t *metrics,
 	return 1;
 }
 
-/*
- * Find the hairpin in sequence s.
- * Returns the index where the hairpin is found, or -1 otherwise.
- * TODO: look harder, don't assume hairpin is always in the middle.
- */
+
 int
-find_hairpin_se(const opt_t *opt, metrics_t *metrics, const char *s, size_t slen)
+xstrlcmp(const char *s1, const char *s2, size_t len)
 {
-	int len;
 	int i;
-	int h_mm = 0, h_mm_i = -1;
-
-	if ((slen - opt->hlen) % 2 != 0) {
-		// TODO: look harder
-		metrics->hairpin_missing++;
-		return -1;
-	}
-
-	// Folded fragment length.
-	len = (slen - opt->hlen) / 2;
-
-	for (i=0; i<opt->hlen; i++) {
-		if (s[i+len] != opt->hairpin[i]) {
-			// Allow one mismatch only in the hairpin.
-			if (++h_mm > 1) {
-				// Missing hairpin.
-				metrics->hairpin_missing++;
-				return -1;
-			}
-			h_mm_i = i;
-		}
-	}
-
-	if (h_mm) {
-		int idx = nt2int[(int)opt->hairpin[h_mm_i]] << 2 | nt2int[(int)s[len+h_mm_i]];
-		metrics->mm_hairpin[idx]++;
-	}
-
-	return len;
-}
-
-int
-strlcmp_mm(const char *s1, const char *s2, size_t len)
-{
-	int i, mm=0;
 	for (i=0; i<len; i++) {
 		if (s1[i] != s2[i]) {
-			if (mm++ == 0)
-				return -1;
+			return -1;
 		}
 	}
-
 	return 0;
 }
 
@@ -313,7 +264,7 @@ find_hairpin(char *hairpin, size_t hlen, const char *s, size_t slen, int start, 
 	int end = partial ? slen : slen-hlen;
 
 	for (i=start; i<end; i++) {
-		if (strlcmp_mm(s+i, hairpin, min(hlen, slen-i)) == 0)
+		if (xstrlcmp(s+i, hairpin, min(hlen, slen-i)) == 0)
 			return i;
 	}
 
@@ -321,8 +272,6 @@ find_hairpin(char *hairpin, size_t hlen, const char *s, size_t slen, int start, 
 }
 
 /*
- * Paired end reads which remained uncollapsed after read merging
- * by e.g. AdapterRemoval.  We expect the two reads to be palindromic.
  */
 int
 foldreads_pe(const opt_t *opt, metrics_t *metrics)
@@ -374,20 +323,23 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 			goto err2;
 		}
 
-		hp_pos = find_hairpin(opt->hairpin, opt->hlen, seq1->seq.s, seq1->seq.l, seq1->seq.l-opt->hlen, 1);
+		hp_pos = find_hairpin(opt->hairpin, opt->hlen, seq1->seq.s, seq1->seq.l, 0, 0);
 		if (hp_pos > 0) {
 			seq1->seq.l = hp_pos;
 			seq1->qual.l = hp_pos;
+		} else {
+			metrics->hairpin_missing++;
+			continue;
 		}
 
-		hp_pos = find_hairpin(opt->rhairpin, opt->hlen, seq2->seq.s, seq2->seq.l, seq2->seq.l-opt->hlen, 1);
+		hp_pos = find_hairpin(opt->rhairpin, opt->hlen, seq2->seq.s, seq2->seq.l, 0, 0);
 		if (hp_pos > 0) {
 			seq2->seq.l = hp_pos;
 			seq2->qual.l = hp_pos;
+		} else {
+			metrics->hairpin_missing++;
+			continue;
 		}
-
-		revcomp(seq2->seq.s, seq2->seq.l);
-		reverse(seq2->qual.s, seq2->qual.l);
 
 		f = fold(opt, metrics, seq1->seq.s, seq1->qual.s, seq1->seq.l,
 			seq2->seq.s, seq2->qual.s, seq2->seq.l, &s_out, &q_out);
@@ -418,76 +370,6 @@ err2:
 	kseq_destroy(seq1);
 	gzclose(fp2);
 err1:
-	gzclose(fp1);
-err0:
-	return ret;
-}
-
-
-/*
- * Single ended reads are assumed to be paired end reads collapsed
- * by e.g. AdapterRemoval.  Hence we can expect the terminal regions
- * to be palindromic.
- */
-int
-foldreads_se(const opt_t *opt, metrics_t *metrics)
-{
-	gzFile fp1;
-	kseq_t *seq;
-	int len;
-	int ret, f;
-	char *s_out, *q_out;
-	int hp_pos; // hairpin position
-	int s2_start;
-
-	fp1 = gzopen(opt->fn1, "r");
-	if (fp1 == NULL) {
-		fprintf(stderr, "%s: %s\n", opt->fn1, strerror(errno));
-		ret = 1;
-		goto err0;
-	}
-
-	seq = kseq_init(fp1);
-
-	while ((len = kseq_read(seq)) >= 0) {
-		metrics->total_reads++;
-
-		if (len < opt->hlen)
-			continue;
-
-		if (seq->qual.l == 0) {
-			fprintf(stderr, "%s: qual scores required.\n", opt->fn1);
-			ret = 2;
-			goto err1;
-		}
-
-		hp_pos = find_hairpin_se(opt, metrics, seq->seq.s, seq->seq.l);
-		if (hp_pos < 0)
-			continue;
-
-		s2_start = hp_pos + opt->hlen;
-
-		f = fold(opt, metrics, seq->seq.s, seq->qual.s, hp_pos,
-			seq->seq.s+s2_start, seq->qual.s+s2_start,
-			seq->seq.l-s2_start, &s_out, &q_out);
-		if (f) {
-			char *comment = seq->comment.l==0 ? NULL : seq->comment.s;
-			seq_write(seq->name.s, comment, s_out, q_out, opt->fos);
-			free(s_out);
-			free(q_out);
-		}
-	}
-
-	if (len != -1) {
-		fprintf(stderr, "%s: unexpected end of file.\n", opt->fn1);
-		ret = 3;
-		goto err1;
-	}
-
-	ret = 0;
-
-err1:
-	kseq_destroy(seq);
 	gzclose(fp1);
 err0:
 	return ret;
@@ -583,7 +465,7 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 void
 usage(char *argv0)
 {
-	fprintf(stderr, "usage: %s [-b] [-o OUT.fq] [-m FILE] -p SEQ -1 IN1.fq [-2 IN2.fq]\n", argv0);
+	fprintf(stderr, "usage: %s [-b] [-o OUT.fq] [-m FILE] -p SEQ -1 IN1.fq -2 IN2.fq\n", argv0);
 	fprintf(stderr, " -b                Mark putative methylated cytosines with lowercase 'c',\n"
 			"                   or lowercase 'g' for methylation on the other strand.\n");
 	fprintf(stderr, " -o OUT.fq         Fastq output file [stdout].\n");
@@ -633,8 +515,8 @@ main(int argc, char **argv)
 		}
 	}
 
-	if (opt.fn1 == NULL) {
-		fprintf(stderr, "Error: must specify at least one input file.\n");
+	if (opt.fn1 == NULL || opt.fn2 == NULL) {
+		fprintf(stderr, "Error: must specify input files.\n");
 		usage(argv[0]);
 	}
 
@@ -665,10 +547,7 @@ main(int argc, char **argv)
 		}
 	}
 
-	if (opt.fn2)
-		ret = foldreads_pe(&opt, &metrics);
-	else
-		ret = foldreads_se(&opt, &metrics);
+	ret = foldreads_pe(&opt, &metrics);
 
 	free(opt.rhairpin);
 

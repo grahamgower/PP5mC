@@ -1,6 +1,6 @@
 TARGET=foldreads
 OBJS=foldreads.o
-CFLAGS=-Wall -g -O0 -funroll-loops
+CFLAGS=-Wall -g -O2 -funroll-loops
 LDFLAGS=
 LIBS=-Wl,-Bstatic -lz -Wl,-Bdynamic
 
