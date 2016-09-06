@@ -89,6 +89,10 @@ if __name__ == "__main__":
     ax4 = fig1.add_subplot(gs1[1,-3:], sharey=ax3, sharex=ax2)
     ax2.invert_xaxis()
 #    ax4.invert_xaxis()
+    ax2.yaxis.tick_right()
+    ax2.tick_params(right="on", left="on")
+    ax4.yaxis.tick_right()
+    ax4.tick_params(right="on", left="on")
 
     bpairs = set(pairs_l.keys())
     if bpairs != set(pairs_r.keys()):
@@ -121,9 +125,10 @@ if __name__ == "__main__":
     ax4.set_xlim(max(pos_r)+0.5, -0.5)
 
     setp(ax1.get_xticklabels(), visible=False)
-    setp(ax2.get_yticklabels(), visible=False)
+    #setp(ax2.get_yticklabels(), visible=False)
     setp(ax2.get_xticklabels(), visible=False)
-    setp(ax4.get_yticklabels(), visible=False)
+    #setp(ax4.get_yticklabels(), visible=False)
+    ax4.yaxis.set_label_position("right")
 
     ax1.legend(numpoints=1, frameon=False, loc='center left', bbox_to_anchor=(0.975, 0.75))
     ax3.legend(numpoints=1, frameon=False, loc='center left', bbox_to_anchor=(0.975, 0.75))
