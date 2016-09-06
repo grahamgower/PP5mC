@@ -1,7 +1,7 @@
 /*
- * Fold input sequences at the hairpin.
+ * Fold r1/r2 sequences back together at the hairpin.
  *
- * Copyright (c) 2015 Graham Gower <graham.gower@gmail.com>
+ * Copyright (c) 2016 Graham Gower <graham.gower@gmail.com>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -21,10 +21,13 @@
 #include <errno.h>
 #include <getopt.h>
 #include <stdint.h>
+#include <math.h>
 #include <zlib.h>
 #include "kseq.h"
+#include "khash.h"
 
 KSEQ_INIT(gzFile, gzread);
+KHASH_SET_INIT_STR(str);
 
 #define min(a,b) ((a)<(b)?(a):(b))
 #define max(a,b) ((a)>(b)?(a):(b))
@@ -44,8 +47,8 @@ typedef uint64_t pairs_t[N_POS][16];
 // count things
 typedef struct {
 	uint64_t total_reads;
-	uint64_t hairpin_missing;
-	uint64_t palindrome_missing;
+	uint64_t folded_pairs;
+	uint64_t hairpin_complete;
 	uint64_t ntcomp[4]; // nucleotide composition
 
 	uint64_t match_total;
@@ -54,7 +57,15 @@ typedef struct {
 
 	uint64_t mm_hairpin[16]; // X->Y mismatches in the hairpin
 
-#define DS_DIST_FROM_END 15
+	khash_t(str) *seqmap;
+	uint64_t clones;
+
+	// {unmethylated, methylated} counts for each of CpG, CHG, CHH contexts
+	uint64_t cpg[2];
+	uint64_t chg[2];
+	uint64_t chh[2];
+
+#define DS_DIST_FROM_END 20
 	// X<->Y pairings which are putatively in the double stranded region
 	// of the fragment - i.e. at least DS_DIST_FROM_END from an end.
 	uint64_t ds_pairs[16];
@@ -62,9 +73,47 @@ typedef struct {
 	// X<->Y pairs for each position within a fragment,
 	// for up to N_POS bases from an end.
 	pairs_t pairs_l, pairs_r;
+
+	uint64_t **pairs;
 } metrics_t;
 
 static int nt2int[] = {['A']=0, ['C']=1, ['G']=2, ['T']=3, ['a']=0, ['c']=1, ['g']=2, ['t']=3};
+static char cmap[] = {['A']='T', ['C']='G', ['G']='C', ['T']='A', ['N']='N', ['n']='N',
+				['a']='t', ['c']='g', ['g']='c', ['t']='a'};
+
+/* Inverse poisson CDF, stolen from bwa: bwtaln.c */
+#define AVG_ERR 0.02
+#define MAXDIFF_THRES 0.01
+int
+bwa_cal_maxdiff(int l, double err, double thres)
+{
+	double elambda = exp(-l * err);
+	double sum, y = 1.0;
+	int k, x = 1;
+	for (k = 1, sum = elambda; k < 1000; ++k) {
+		y *= l * err;
+		x *= k;
+		sum += elambda * y / x;
+		if (1.0 - sum < thres) return k;
+	}
+	return 2;
+}
+
+int
+maxdiff(int l, double err, double thres)
+{
+	static int maxdiff[1000];
+	static int init = 0;
+
+	if (!init) {
+		int i;
+		for (i=0; i<1000; i++)
+			maxdiff[i] = bwa_cal_maxdiff(i, err, thres);
+		init = 1;
+	}
+
+	return l<1000 ? maxdiff[l] : maxdiff[999];
+}
 
 /*
  * Reverse complement of s.
@@ -72,7 +121,6 @@ static int nt2int[] = {['A']=0, ['C']=1, ['G']=2, ['T']=3, ['a']=0, ['c']=1, ['g
 void
 revcomp(char *s, size_t len)
 {
-	static char cmap[] = {['A'] = 'T', ['C'] = 'G', ['G'] = 'C', ['T'] = 'A', ['N'] = 'N'};
 	int i, j;
 	int tmp;
 
@@ -86,41 +134,30 @@ revcomp(char *s, size_t len)
 		s[i] = cmap[(int)s[i]];
 }
 
-/*
- * Reverse string s.
+/* 
+ * Compare s1 and s2 to the hairpin h1 and its reverse complement h2.
+ * Return 0 for a match, -1 otherwise.
  */
-void
-reverse(char *s, size_t len)
+int
+hpcmp(const char *s1, const char *s2, const char *h1, const char *h2, size_t len)
 {
-	int i, j;
-	char tmp;
+	int i, mm;
 
-	for (i=0, j=len-1; i<len/2; i++, j--) {
-		tmp = s[i];
-		s[i] = s[j];
-		s[j] = tmp;
+	mm = maxdiff(len*2, AVG_ERR, MAXDIFF_THRES);
+
+	for (i=0; i<len; i++) {
+		mm -= (s1[i] != h1[i]) + (s2[i] != h2[i]);
+		if (mm < 0)
+			return -1;
 	}
-}
 
-/*
- * Write out a single fastq entry.
- */
-void
-seq_write(const char *name, const char *comment, const char *seq, const char *qual, FILE *fs)
-{
-	if (comment)
-		fprintf(fs, "@%s %s\n%s\n+\n%s\n", name, comment, seq, qual);
-	else
-		fprintf(fs, "@%s\n%s\n+\n%s\n", name, seq, qual);
+	return 0;
 }
-
 
 /*
  * Fold the input sequences, s1 and s2.
  * Folded sequence is placed in s_out, folded quality scores placed in q_out.
  * Returns 1 if folding was successful, 0 otherwise.
- *
- * TODO: try gapped alignment if the simple case fails.
  */
 int
 fold(const opt_t *opt, metrics_t *metrics,
@@ -128,16 +165,17 @@ fold(const opt_t *opt, metrics_t *metrics,
 		const char *s2, const char *q2, size_t len2,
 		char **_s_out, char **_q_out)
 {
-	static char cmap[] = {['A']='T', ['C']='G', ['G']='C', ['T']='A',
-				['N']='N', ['n']='N',
-				['a']='t', ['c']='g', ['g']='c', ['t']='a'};
 	char *s_out, *q_out;
 	int i, j;
+	int hairpin = 0;
 
 	if (len1 != len2) {
+		fprintf(stderr, "Error: input r1/r2 reads have different lengths.\n");
+		exit(1);
+		/*
 		*_s_out = *_q_out = NULL;
-		metrics->palindrome_missing++;
 		return 0;
+		*/
 	}
 
 	// metrics
@@ -146,8 +184,8 @@ fold(const opt_t *opt, metrics_t *metrics,
 	uint32_t damage_total = 0;
 	uint32_t mm_total = 0;
 	uint32_t ds_pairs[16] = {0,};
-	pairs_t pairs_l = {{0,},};
-	pairs_t pairs_r = {{0,},};
+	uint32_t pairs[len1][16];
+	memset(pairs, 0, sizeof(pairs));
 
 	s_out = malloc(len1+1);
 	q_out = malloc(len1+1);
@@ -158,25 +196,31 @@ fold(const opt_t *opt, metrics_t *metrics,
 	}
 
 	for (i=0; i<len1; i++) {
-		char c1 = s1[i];
-		char c2 = s2[i]; //cmap[(int)s2[i]];
+
+		// Look for the hairpin in both reads.
+		if (!hpcmp(s1+i, s2+i, opt->hairpin, opt->rhairpin, min(len1-i, opt->hlen))) {
+			if (len1-i >= opt->hlen) {
+				// full hairpin
+				hairpin = 2;
+				metrics->hairpin_complete++;
+			} else
+				// incomplete hairpin
+				hairpin = 1;
+			break;
+		}
+
+		char c1 = toupper(s1[i]);
+		char c2 = toupper(s2[i]);
 
 		if (c1 == 'N' || c2 == 'N') {
-			/*
+			// Use the other read, if we can.
 			s_out[i] = c2 == 'N' ? c1 : c2;
 			q_out[i] = c2 == 'N' ? q1[i] : q2[i];
-			*/
-			s_out[i] = 'N';
-			q_out[i] = '!';
 			continue;
 		}
 
 		int nt_idx = nt2int[(int)c1] << 2 | nt2int[(int)cmap[(int)c2]];
-
-		if (i < N_POS)
-			pairs_l[i][nt_idx]++;
-		if (i > DS_DIST_FROM_END && i >= len1 - N_POS)
-			pairs_r[len1-i-1][nt_idx]++;
+		pairs[i][nt_idx]++;
 
 		if (i > DS_DIST_FROM_END && i < (len1-DS_DIST_FROM_END))
 			// Assume this position is not derived from a
@@ -205,17 +249,130 @@ fold(const opt_t *opt, metrics_t *metrics,
 		}
 	}
 
-	if (mm_total > match_total) {
-		// This is not a palindromic sequence.
+	int last_idx = i;
+
+	if (mm_total > maxdiff(len1, AVG_ERR, MAXDIFF_THRES)) {
+		// Sequences are not complementary.
 		free(s_out);
 		free(q_out);
 		*_s_out = *_q_out = NULL;
-		metrics->palindrome_missing++;
+		//printf("%s\n%s\n\n", s1, s2);
 		return 0;
 	}
 
-	s_out[i] = '\0';
-	q_out[i] = '\0';
+	if (i == 0) {
+		// Hairpin at the start of both reads.
+		free(s_out);
+		free(q_out);
+		*_s_out = *_q_out = NULL;
+		//printf("%s\n%s\n\n", s1, s2);
+		return 0;
+	}
+
+	{
+		// Check for duplicate sequences in the seqmap.
+		khint_t k;
+		int ret;
+		char c = s_out[i]; // save first character of the hairpin
+		s_out[i] = '\0';
+
+		k = kh_put(str, metrics->seqmap, s_out, &ret);
+		switch (ret) {
+			case -1:
+				fprintf(stderr, "Out of memory\n");
+				exit(1);
+			case 0:
+				// duplicate
+				metrics->clones++;
+				goto no_metrics;
+			case 1:
+			case 2:
+				// unique
+				kh_key(metrics->seqmap, k) = strdup(s_out);
+				break;
+		}
+		s_out[i] = c;
+	}
+
+	/*
+	 * Record metrics.
+	 */
+
+	// For full hairpins only.
+	if (hairpin == 2) {
+		// Hairpin mismatches
+		int end = last_idx+opt->hlen;
+		for (i=last_idx, j=end-1; i<end; i++, j--) {
+			char c1 = s1[i];
+			char c2 = cmap[(int)s2[j]];
+			char h = opt->hairpin[i-last_idx];
+			int nt_idx;
+			if (c1 != h && c1 != 'N') {
+				// r1 has incorrect base
+				nt_idx = nt2int[(int)h] << 2 | nt2int[(int)c1];
+				metrics->mm_hairpin[nt_idx]++;
+			}
+			if (c2 != h && c2 != 'N') {
+				// r2 has incorrect base
+				nt_idx = nt2int[(int)cmap[(int)h]] << 2 | nt2int[(int)s2[j]];
+				metrics->mm_hairpin[nt_idx]++;
+			}
+			static int nterr[256] = {['A']=1, ['C']=1, ['G']=1, ['T']=1, ['N']=1};
+			if (!nterr[(int)c1])
+				fprintf(stderr, "%s\n", s1);
+		}
+
+		if (last_idx >= 2*N_POS) {
+			// Folded watson/crick pairs.
+			for (i=0; i<N_POS; i++) {
+				for (j=0; j<16; j++) {
+					metrics->pairs_l[i][j] += pairs[i][j];
+					metrics->pairs_r[i][j] += pairs[last_idx-i-1][j];
+				}
+			}
+			for (j=0; j<16; j++)
+				metrics->ds_pairs[j] += ds_pairs[j];
+
+		}
+
+		// Contextual methylation metrics, only count away from the ends.
+		for (i=2; i<last_idx-2; i++) {
+			switch (s_out[i]) {
+				case 'C':
+					if (toupper(s_out[i+1]) == 'G')
+						metrics->cpg[0]++;
+					else if (toupper(s_out[i+2]) == 'G')
+						metrics->chg[0]++;
+					else
+						metrics->chh[0]++;
+					break;
+				case 'c':
+					if (toupper(s_out[i+1]) == 'G')
+						metrics->cpg[1]++;
+					else if (toupper(s_out[i+2]) == 'G')
+						metrics->chg[1]++;
+					else
+						metrics->chh[1]++;
+					break;
+				case 'G':
+					if (toupper(s_out[i-1]) == 'C')
+						metrics->cpg[0]++;
+					else if (toupper(s_out[i-2]) == 'C')
+						metrics->chg[0]++;
+					else
+						metrics->chh[0]++;
+					break;
+				case 'g':
+					if (toupper(s_out[i-1]) == 'C')
+						metrics->cpg[1]++;
+					else if (toupper(s_out[i-2]) == 'C')
+						metrics->chg[1]++;
+					else
+						metrics->chh[1]++;
+					break;
+			}
+		}
+	}
 
 	metrics->match_total += match_total;
 	metrics->damage_total += damage_total;
@@ -224,51 +381,25 @@ fold(const opt_t *opt, metrics_t *metrics,
 	for (i=0; i<4; i++)
 		metrics->ntcomp[i] += ntcomp[i];
 
-	for (j=0; j<16; j++) {
-		for (i=0; i<N_POS; i++) {
-			metrics->pairs_l[i][j] += pairs_l[i][j];
-			metrics->pairs_r[i][j] += pairs_r[i][j];
-		}
-		metrics->ds_pairs[j] += ds_pairs[j];
-	}
-
+no_metrics:
+	s_out[last_idx] = '\0';
+	q_out[last_idx] = '\0';
 	*_s_out = s_out;
 	*_q_out = q_out;
-	
+
 	return 1;
 }
 
-
-int
-xstrlcmp(const char *s1, const char *s2, size_t len)
-{
-	int i;
-	for (i=0; i<len; i++) {
-		if (s1[i] != s2[i]) {
-			return -1;
-		}
-	}
-	return 0;
-}
-
 /*
- * Search for a hairpin in sequence s, starting from position start.
- * Mismatches are not allowed.  If partial is 1, accept partial matches to the
- * hairpin at the end of the sequence.
- * Returns the index where the hairpin is found, or -1 otherwise.
+ * Write out a single fastq entry.
  */
-int
-find_hairpin(char *hairpin, size_t hlen, const char *s, size_t slen, int start, int partial)
+void
+seq_write(const char *name, const char *comment, const char *seq, const char *qual, FILE *fs)
 {
-	int i;
-	int end = partial ? slen : slen-hlen;
-
-	for (i=start; i<end; i++) {
-		if (xstrlcmp(s+i, hairpin, min(hlen, slen-i)) == 0)
-			return i;
-	}
-
-	return -1;
+	if (comment)
+		fprintf(fs, "@%s %s\n%s\n+\n%s\n", name, comment, seq, qual);
+	else
+		fprintf(fs, "@%s\n%s\n+\n%s\n", name, seq, qual);
 }
 
 /*
@@ -281,7 +412,6 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 	int len1, len2;
 	int ret, f;
 	char *s_out, *q_out;
-	int hp_pos;
 
 	fp1 = gzopen(opt->fn1, "r");
 	if (fp1 == NULL) {
@@ -323,24 +453,6 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 			goto err2;
 		}
 
-		hp_pos = find_hairpin(opt->hairpin, opt->hlen, seq1->seq.s, seq1->seq.l, 0, 0);
-		if (hp_pos > 0) {
-			seq1->seq.l = hp_pos;
-			seq1->qual.l = hp_pos;
-		} else {
-			metrics->hairpin_missing++;
-			continue;
-		}
-
-		hp_pos = find_hairpin(opt->rhairpin, opt->hlen, seq2->seq.s, seq2->seq.l, 0, 0);
-		if (hp_pos > 0) {
-			seq2->seq.l = hp_pos;
-			seq2->qual.l = hp_pos;
-		} else {
-			metrics->hairpin_missing++;
-			continue;
-		}
-
 		f = fold(opt, metrics, seq1->seq.s, seq1->qual.s, seq1->seq.l,
 			seq2->seq.s, seq2->qual.s, seq2->seq.l, &s_out, &q_out);
 		if (f) {
@@ -348,6 +460,7 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 			seq_write(seq1->name.s, comment, s_out, q_out, opt->fos);
 			free(s_out);
 			free(q_out);
+			metrics->folded_pairs++;
 		}
 	}
 
@@ -380,8 +493,7 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 {
 	FILE *fp = opt->fom;
 	const pairs_t *pairs;
-	uint32_t hp_comp[4];
-	uint64_t n_hairpins = metrics->total_reads - metrics->hairpin_missing;
+	uint32_t hp_comp[4] = {0,};
 	uint64_t total_bases, total_bases2, total_ds_pairs;
 	int i, j, k;
 
@@ -394,36 +506,52 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 	// Total nucleotide count, including mismatches.
 	total_bases2 = metrics->match_total + metrics->damage_total + metrics->mm_total;
 
-	fprintf(fp, "Total reads: %jd\n", (uintmax_t)metrics->total_reads);
-	fprintf(fp, "Fraction of reads with missing hairpin: %lf\n",
-			(double)metrics->hairpin_missing/metrics->total_reads);
-	fprintf(fp, "Fraction of reads with missing palindrome: %lf\n",
-			(double)metrics->palindrome_missing/metrics->total_reads);
-	fprintf(fp, "Matches=%lf, Damaged=%lf, Mismatches=%lf\n",
-			(double)metrics->match_total/total_bases2,
-			(double)metrics->damage_total/total_bases2,
+	fprintf(fp, "Total read pairs: %jd\n", (uintmax_t)metrics->total_reads);
+	fprintf(fp, "Number of successfully folded read pairs: %jd\n", (uintmax_t)metrics->folded_pairs);
+	fprintf(fp, "Number of read pairs with complete hairpin: %jd\n",
+			(uintmax_t)metrics->hairpin_complete);
+	fprintf(fp, "Clonality of folded pairs: %lf\n\n", (double)metrics->clones/metrics->folded_pairs);
+
+	fprintf(fp, "Base pair concordance: %lf\n",
+			(double)metrics->match_total/total_bases2);
+	fprintf(fp, "Base pair discordance (C<->T or G<->A): %lf\n",
+			(double)metrics->damage_total/total_bases2);
+	fprintf(fp, "Base pair discordance (other): %lf\n\n",
 			(double)metrics->mm_total/total_bases2);
-	fprintf(fp, "Base composition (folded sequences): A=%lf, C=%lf, G=%lf, T=%lf, GC=%lf\n",
+
+	fprintf(fp, "Base frequency: A=%lf, C=%lf, G=%lf, T=%lf, GC=%lf\n",
 			(double)metrics->ntcomp[0]/total_bases,
 			(double)metrics->ntcomp[1]/total_bases,
 			(double)metrics->ntcomp[2]/total_bases,
 			(double)metrics->ntcomp[3]/total_bases,
 			(double)(metrics->ntcomp[1]+metrics->ntcomp[2])/total_bases);
+	fprintf(fp, "Methylation frequency: CpG=%lf, CHG=%lf, CHH=%lf\n",
+			(double)metrics->cpg[1]/(metrics->cpg[0]+metrics->cpg[1]),
+			(double)metrics->chg[1]/(metrics->chg[0]+metrics->chg[1]),
+			(double)metrics->chh[1]/(metrics->chh[0]+metrics->chh[1]));
 
 	// Nucleotide composition of the hairpin.
-	for(i=0; i<4; i++)
-		hp_comp[i] = 0;
 	for (i=0; i<opt->hlen; i++)
 		hp_comp[nt2int[(int)opt->hairpin[i]]]++;
 
+	fprintf(fp, "\nHairpin sequencing mismatches (Hairpin->Observed shown as Row->Column):\n");
+	fprintf(fp, " \tA\t\tC\t\tG\t\tT\t\tTotal\n");
+	double col[4] = {0,};
 	for (i=0; i<4; i++) {
-		uint64_t mm = 0;
-		for (j=0; j<4; j++)
-			mm += metrics->mm_hairpin[i<<2|j];
-		fprintf(fp, "Hairpin mismatch: %c->X = %lg\n",
-					"ACGT"[i],
-					(double)mm / (hp_comp[i] * n_hairpins));
+		double row = 0;
+		fprintf(fp, "%c", "ACGT"[i]);
+		for (j=0; j<4; j++) {
+			double mm = (double)metrics->mm_hairpin[i<<2|j]/(2.0 * hp_comp[i] * metrics->hairpin_complete * (double)metrics->clones/metrics->folded_pairs);
+			col[j] += mm;
+			row += mm;
+			fprintf(fp, "\t%lf", mm);
+		}
+		fprintf(fp, "\t%lf\n", row);
+
 	}
+	fprintf(fp, "Total\t%lf\t%lf\t%lf\t%lf\t%lf\n",
+			col[0], col[1], col[2], col[3],
+			col[0]+col[1]+col[2]+col[3]);
 
 	total_ds_pairs = 0;
 	for (i=0; i<16; i++)
@@ -449,7 +577,7 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 			for (j=0; j<4; j++) {
 				fprintf(fp, "%c<->%c", "ACGT"[i], "ACGT"[j]);
 				for (k=0; k<N_POS; k++) {
-					fprintf(fp, "\t%lf", (double)(*pairs)[k][i<<2|j] / (metrics->total_reads - metrics->hairpin_missing - metrics->palindrome_missing));
+					fprintf(fp, "\t%lf", (double)(*pairs)[k][i<<2|j] / (metrics->hairpin_complete * (double)metrics->clones/metrics->folded_pairs));
 				}
 				fprintf(fp, "\n");
 			}
@@ -547,7 +675,15 @@ main(int argc, char **argv)
 		}
 	}
 
+	metrics.seqmap = kh_init(str);
 	ret = foldreads_pe(&opt, &metrics);
+
+	khint_t k;
+	for (k=kh_begin(metrics.seqmap); k!=kh_end(metrics.seqmap); k++) {
+		if (kh_exist(metrics.seqmap, k))
+			free((char *)kh_key(metrics.seqmap, k));
+	}
+	kh_destroy(str, metrics.seqmap);
 
 	free(opt.rhairpin);
 
@@ -566,6 +702,7 @@ main(int argc, char **argv)
 
 	if (fom_fn)
 		fclose(opt.fom);
+
 
 	return ret;
 }
