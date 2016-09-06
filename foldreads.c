@@ -593,6 +593,7 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 void
 usage(char *argv0)
 {
+	fprintf(stderr, "foldreads v2\n");
 	fprintf(stderr, "usage: %s [-b] [-o OUT.fq] [-m FILE] -p SEQ -1 IN1.fq -2 IN2.fq\n", argv0);
 	fprintf(stderr, " -b                Mark putative methylated cytosines with lowercase 'c',\n"
 			"                   or lowercase 'g' for methylation on the other strand.\n");
