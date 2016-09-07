@@ -39,6 +39,7 @@ typedef struct {
 	FILE *fos; // File pointer for outputting sequences.
 	FILE *fom; // File pointer for outputting metrics.
 	FILE *f_unmatched_r1, *f_unmatched_r2; // File pointers for unfolded reads
+	int phred_scale;
 } opt_t;
 
 #define N_POS 30
@@ -86,7 +87,9 @@ static int nt2int[] = {['A']=0, ['C']=1, ['G']=2, ['T']=3, ['a']=0, ['c']=1, ['g
 static char cmap[] = {['A']='T', ['C']='G', ['G']='C', ['T']='A', ['N']='N', ['n']='N',
 				['a']='t', ['c']='g', ['g']='c', ['t']='a'};
 
-/* Inverse poisson CDF, stolen from bwa: bwtaln.c */
+/*
+ * Inverse poisson CDF, stolen from bwa: bwtaln.c
+ */
 #define AVG_ERR 0.02
 #define MAXDIFF_THRES 0.01
 int
@@ -237,19 +240,27 @@ fold(const opt_t *opt, metrics_t *metrics,
 				// Unconverted C<->G.
 				c2 = tolower(c2);
 			s_out[i] = c2;
-			q_out[i] = 'I';
+			q_out[i] = min((int)q1[i]+(int)q2[i]-2*opt->phred_scale, 40) +33;
 			match_total++;
 			ntcomp[nt2int[(int)c2]]++;
 		} else if ((c1 == 'T' && c2 == 'C') || (c1 == 'G' && c2 == 'A')) {
 			// Putatively damaged, or bisulfite converted.
 			s_out[i] = c2 == 'C' ? 'C' : 'G';
-			q_out[i] = c2 == 'C' ? q2[i] : q1[i];
+			q_out[i] = min((int)q1[i]+(int)q2[i]-2*opt->phred_scale, 40) +33;
 			damage_total++;
 			ntcomp[nt2int[(int)s_out[i]]]++;
 		} else {
-			// Mismatch, probably sequencing error.
-			s_out[i] = 'N';
-			q_out[i] = '!';
+			// Mismatch, take highest quality base.
+			if (q1[i] > q2[i]) {
+				s_out[i] = c1;
+				q_out[i] = max((int)q1[i]-(int)q2[i], 0) +33;
+			} else if (q1[i] < q2[i]) {
+				s_out[i] = c2;
+				q_out[i] = max((int)q2[i]-(int)q1[i], 0) +33;
+			} else {
+				s_out[i] = 'N';
+				q_out[i] = '!';
+			}
 			mm_total++;
 		}
 	}
@@ -681,7 +692,7 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 void
 usage(char *argv0)
 {
-	fprintf(stderr, "foldreads v2\n");
+	fprintf(stderr, "foldreads v3\n");
 	fprintf(stderr, "usage: %s [-o OUT.fq] [-m FILE] [-u PFX] -p SEQ -1 IN1.fq -2 IN2.fq\n", argv0);
 	fprintf(stderr, " -o OUT.fq         Fastq output file [stdout].\n");
 	fprintf(stderr, " -m FILE           Metrics output file [stderr].\n");
@@ -706,6 +717,7 @@ main(int argc, char **argv)
 	memset(&metrics, '\0', sizeof(metrics_t));
 	opt.fos = stdout;
 	opt.fom = stderr;
+	opt.phred_scale = 33; // Input phred scale; we always output phred+33.
 
 	while ((c = getopt(argc, argv, "o:m:p:u:1:2:")) != -1) {
 		switch (c) {
