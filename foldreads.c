@@ -41,7 +41,7 @@ typedef struct {
 	FILE *fom; // File pointer for outputting metrics.
 } opt_t;
 
-#define N_POS 20
+#define N_POS 30
 typedef uint64_t pairs_t[N_POS][16];
 
 // count things
@@ -49,6 +49,7 @@ typedef struct {
 	uint64_t total_reads;
 	uint64_t folded_pairs;
 	uint64_t hairpin_complete;
+	uint64_t unique_hairpin_complete;
 	uint64_t ntcomp[4]; // nucleotide composition
 
 	uint64_t match_total;
@@ -60,10 +61,14 @@ typedef struct {
 	khash_t(str) *seqmap;
 	uint64_t clones;
 
-	// {unmethylated, methylated} counts for each of CpG, CHG, CHH contexts
-	uint64_t cpg[2];
-	uint64_t chg[2];
-	uint64_t chh[2];
+	struct {
+		struct {
+			// unmethylated, methylated, hemimethylated
+			uint64_t u, m, h;
+		} cpg, chg, chh; // CpG, CHG, CHH contexts
+	} p, m; // plus, minus strand
+
+	uint64_t hemi_cpg, hemi_chg;
 
 #define DS_DIST_FROM_END 20
 	// X<->Y pairings which are putatively in the double stranded region
@@ -335,43 +340,107 @@ fold(const opt_t *opt, metrics_t *metrics,
 
 		}
 
-		// Contextual methylation metrics, only count away from the ends.
-		for (i=2; i<last_idx-2; i++) {
+		// Contextual methylation metrics.
+		for (i=0, j=last_idx-1; i<last_idx-1; i++, j--) {
+
+			// (+) strand
 			switch (s_out[i]) {
 				case 'C':
-					if (toupper(s_out[i+1]) == 'G')
-						metrics->cpg[0]++;
-					else if (toupper(s_out[i+2]) == 'G')
-						metrics->chg[0]++;
-					else
-						metrics->chh[0]++;
+					// CpG?
+					if (s_out[i+1] == 'G')
+						metrics->p.cpg.u++;
+					else if (s_out[i+1] == 'g')
+						metrics->p.cpg.h++;
+					else {
+						// CHG?
+						if (i+2 < last_idx && s_out[i+1] != 'N') {
+							if (s_out[i+2] == 'G')
+								metrics->p.chg.u++;
+							else if (s_out[i+2] == 'g')
+								metrics->p.chg.h++;
+							else {
+								// CHH?
+								if (s_out[i+2] != 'N') {
+									metrics->p.chh.u++;
+								}
+							}
+						}
+					}
 					break;
 				case 'c':
-					if (toupper(s_out[i+1]) == 'G')
-						metrics->cpg[1]++;
-					else if (toupper(s_out[i+2]) == 'G')
-						metrics->chg[1]++;
-					else
-						metrics->chh[1]++;
+					// cpG?
+					if (s_out[i+1] == 'G')
+						metrics->p.cpg.h++;
+					else if (s_out[i+1] == 'g')
+						metrics->p.cpg.m++;
+					else {
+						// cHG?
+						if (i+2 < last_idx && s_out[i+1] != 'N') {
+							if (s_out[i+2] == 'G')
+								metrics->p.chg.h++;
+							else if (s_out[i+2] == 'g')
+								metrics->p.chg.m++;
+							else {
+								// cHH?
+								if (s_out[i+2] != 'N') {
+									metrics->p.chh.m++;
+								}
+							}
+						}
+					}
 					break;
+			}
+
+			// (-) strand
+			switch (s_out[j]) {
 				case 'G':
-					if (toupper(s_out[i-1]) == 'C')
-						metrics->cpg[0]++;
-					else if (toupper(s_out[i-2]) == 'C')
-						metrics->chg[0]++;
-					else
-						metrics->chh[0]++;
+					// GpC?
+					if (s_out[j-1] == 'C')
+						metrics->m.cpg.u++;
+					else if (s_out[j-1] == 'c')
+						metrics->m.cpg.h++;
+					else {
+						// CHG?
+						if (j-2 > 0 && s_out[j-1] != 'N') {
+							if (s_out[j-2] == 'C')
+								metrics->m.chg.u++;
+							else if (s_out[j-2] == 'c')
+								metrics->m.chg.h++;
+							else {
+								// CHH?
+								if (s_out[j-2] != 'N') {
+									metrics->m.chh.u++;
+								}
+							}
+						}
+					}
 					break;
 				case 'g':
-					if (toupper(s_out[i-1]) == 'C')
-						metrics->cpg[1]++;
-					else if (toupper(s_out[i-2]) == 'C')
-						metrics->chg[1]++;
-					else
-						metrics->chh[1]++;
+					// cpG?
+					if (s_out[j-1] == 'C')
+						metrics->m.cpg.h++;
+					else if (s_out[j-1] == 'c')
+						metrics->m.cpg.m++;
+					else {
+						// cHG?
+						if (j-2 > 0 && s_out[j-1] != 'N') {
+							if (s_out[j-2] == 'C')
+								metrics->m.chg.h++;
+							else if (s_out[j-2] == 'c')
+								metrics->m.chg.m++;
+							else {
+								// cHH?
+								if (s_out[j-2] != 'N') {
+									metrics->m.chh.m++;
+								}
+							}
+						}
+					}
 					break;
 			}
 		}
+
+		metrics->unique_hairpin_complete++;
 	}
 
 	metrics->match_total += match_total;
@@ -512,11 +581,11 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 			(uintmax_t)metrics->hairpin_complete);
 	fprintf(fp, "Clonality of folded pairs: %lf\n\n", (double)metrics->clones/metrics->folded_pairs);
 
-	fprintf(fp, "Base pair concordance: %lf\n",
+	fprintf(fp, "Base pair +/- concordance: %lf\n",
 			(double)metrics->match_total/total_bases2);
-	fprintf(fp, "Base pair discordance (C<->T or G<->A): %lf\n",
+	fprintf(fp, "Base pair +/- discordance (C<->T or G<->A): %lf\n",
 			(double)metrics->damage_total/total_bases2);
-	fprintf(fp, "Base pair discordance (other): %lf\n\n",
+	fprintf(fp, "Base pair +/- discordance (other): %lf\n\n",
 			(double)metrics->mm_total/total_bases2);
 
 	fprintf(fp, "Base frequency: A=%lf, C=%lf, G=%lf, T=%lf, GC=%lf\n",
@@ -525,10 +594,17 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 			(double)metrics->ntcomp[2]/total_bases,
 			(double)metrics->ntcomp[3]/total_bases,
 			(double)(metrics->ntcomp[1]+metrics->ntcomp[2])/total_bases);
-	fprintf(fp, "Methylation frequency: CpG=%lf, CHG=%lf, CHH=%lf\n",
-			(double)metrics->cpg[1]/(metrics->cpg[0]+metrics->cpg[1]),
-			(double)metrics->chg[1]/(metrics->chg[0]+metrics->chg[1]),
-			(double)metrics->chh[1]/(metrics->chh[0]+metrics->chh[1]));
+	fprintf(fp, "Methylation frequency (+): CpG=%lf, CHG=%lf, CHH=%lf\n",
+			(double)(2*metrics->p.cpg.m+metrics->p.cpg.h) / (2*metrics->p.cpg.m+metrics->p.cpg.h+2*metrics->p.cpg.u),
+			(double)(2*metrics->p.chg.m+metrics->p.chg.h) / (2*metrics->p.chg.m+metrics->p.chg.h+2*metrics->p.chg.u),
+			(double)(metrics->p.chh.m) / (metrics->p.chg.m+metrics->p.chg.u));
+	fprintf(fp, "Methylation frequency (-): CpG=%lf, CHG=%lf, CHH=%lf\n",
+			(double)(2*metrics->m.cpg.m+metrics->m.cpg.h) / (2*metrics->m.cpg.m+metrics->m.cpg.h+2*metrics->m.cpg.u),
+			(double)(2*metrics->m.chg.m+metrics->m.chg.h) / (2*metrics->m.chg.m+metrics->m.chg.h+2*metrics->m.chg.u),
+			(double)(metrics->m.chh.m) / (metrics->m.chg.m+metrics->m.chg.u));
+	fprintf(fp, "Hemimethylation frequency (+/- discordance): CpG=%lf, CHG=%lf\n",
+			(double)(metrics->p.cpg.h+metrics->m.cpg.h)/(2*metrics->p.cpg.m+metrics->p.cpg.h+2*metrics->p.cpg.u + 2*metrics->m.cpg.m+metrics->m.cpg.h+2*metrics->m.cpg.u),
+			(double)(metrics->p.chg.h+metrics->m.chg.h)/(2*metrics->p.chg.m+metrics->p.chg.h+2*metrics->p.chg.u + 2*metrics->m.chg.m+metrics->m.chg.h+2*metrics->m.chg.u));
 
 	// Nucleotide composition of the hairpin.
 	for (i=0; i<opt->hlen; i++)
@@ -541,7 +617,7 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 		double row = 0;
 		fprintf(fp, "%c", "ACGT"[i]);
 		for (j=0; j<4; j++) {
-			double mm = (double)metrics->mm_hairpin[i<<2|j]/(2.0 * hp_comp[i] * metrics->hairpin_complete * (double)metrics->clones/metrics->folded_pairs);
+			double mm = (double)metrics->mm_hairpin[i<<2|j]/(2.0 * hp_comp[i] * metrics->unique_hairpin_complete);
 			col[j] += mm;
 			row += mm;
 			fprintf(fp, "\t%lf", mm);
@@ -565,8 +641,17 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 		}
 	}
 
+
 	pairs = &metrics->pairs_l;
 	for (;;) {
+		uint64_t bases[N_POS] = {0,};
+		for (i=0; i<4; i++) {
+			for (j=0; j<4; j++) {
+				for (k=0; k<N_POS; k++) {
+					bases[k] += (*pairs)[k][i<<2|j];
+				}
+			}
+		}
 
 		fprintf(fp, "\nWatson<->Crick [%c']", pairs == &metrics->pairs_l ? '5' : '3');
 		for (k=0; k<N_POS; k++)
@@ -577,7 +662,7 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 			for (j=0; j<4; j++) {
 				fprintf(fp, "%c<->%c", "ACGT"[i], "ACGT"[j]);
 				for (k=0; k<N_POS; k++) {
-					fprintf(fp, "\t%lf", (double)(*pairs)[k][i<<2|j] / (metrics->hairpin_complete * (double)metrics->clones/metrics->folded_pairs));
+					fprintf(fp, "\t%lf", (double)(*pairs)[k][i<<2|j] / bases[k]);
 				}
 				fprintf(fp, "\n");
 			}
@@ -594,9 +679,7 @@ void
 usage(char *argv0)
 {
 	fprintf(stderr, "foldreads v2\n");
-	fprintf(stderr, "usage: %s [-b] [-o OUT.fq] [-m FILE] -p SEQ -1 IN1.fq -2 IN2.fq\n", argv0);
-	fprintf(stderr, " -b                Mark putative methylated cytosines with lowercase 'c',\n"
-			"                   or lowercase 'g' for methylation on the other strand.\n");
+	fprintf(stderr, "usage: %s [-o OUT.fq] [-m FILE] -p SEQ -1 IN1.fq -2 IN2.fq\n", argv0);
 	fprintf(stderr, " -o OUT.fq         Fastq output file [stdout].\n");
 	fprintf(stderr, " -m FILE           Metrics output file [stderr].\n");
 	fprintf(stderr, " -p SEQ            The hairpin SEQuence.\n");
@@ -619,11 +702,8 @@ main(int argc, char **argv)
 	opt.fos = stdout;
 	opt.fom = stderr;
 
-	while ((c = getopt(argc, argv, "bo:m:p:1:2:")) != -1) {
+	while ((c = getopt(argc, argv, "o:m:p:1:2:")) != -1) {
 		switch (c) {
-			case 'b':
-				opt.bisulfite = 1;
-				break;
 			case 'o':
 				fos_fn = optarg;
 				break;
