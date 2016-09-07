@@ -38,6 +38,7 @@ typedef struct {
 	char *fn1, *fn2; // Input filenames.
 	FILE *fos; // File pointer for outputting sequences.
 	FILE *fom; // File pointer for outputting metrics.
+	FILE *f_unmatched_r1, *f_unmatched_r2; // File pointers for unfolded reads
 } opt_t;
 
 #define N_POS 30
@@ -260,7 +261,6 @@ fold(const opt_t *opt, metrics_t *metrics,
 		free(s_out);
 		free(q_out);
 		*_s_out = *_q_out = NULL;
-		//printf("%s\n%s\n\n", s1, s2);
 		return 0;
 	}
 
@@ -269,7 +269,6 @@ fold(const opt_t *opt, metrics_t *metrics,
 		free(s_out);
 		free(q_out);
 		*_s_out = *_q_out = NULL;
-		//printf("%s\n%s\n\n", s1, s2);
 		return 0;
 	}
 
@@ -529,6 +528,11 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 			free(s_out);
 			free(q_out);
 			metrics->folded_pairs++;
+		} else if (opt->f_unmatched_r1) {
+			char *comment = seq1->comment.l==0 ? NULL : seq1->comment.s;
+			seq_write(seq1->name.s, comment, seq1->seq.s, seq1->qual.s, opt->f_unmatched_r1);
+			comment = seq2->comment.l==0 ? NULL : seq2->comment.s;
+			seq_write(seq2->name.s, comment, seq2->seq.s, seq2->qual.s, opt->f_unmatched_r2);
 		}
 	}
 
@@ -678,9 +682,10 @@ void
 usage(char *argv0)
 {
 	fprintf(stderr, "foldreads v2\n");
-	fprintf(stderr, "usage: %s [-o OUT.fq] [-m FILE] -p SEQ -1 IN1.fq -2 IN2.fq\n", argv0);
+	fprintf(stderr, "usage: %s [-o OUT.fq] [-m FILE] [-u PFX] -p SEQ -1 IN1.fq -2 IN2.fq\n", argv0);
 	fprintf(stderr, " -o OUT.fq         Fastq output file [stdout].\n");
 	fprintf(stderr, " -m FILE           Metrics output file [stderr].\n");
+	fprintf(stderr, " -u PFX            Filename prefix for unfolded reads []");
 	fprintf(stderr, " -p SEQ            The hairpin SEQuence.\n");
 	fprintf(stderr, " -1 IN1.fq[.gz]    R1 fastq input file.\n");
 	fprintf(stderr, " -2 IN2.fq[.gz]    R2 fastq input file.\n");
@@ -694,6 +699,7 @@ main(int argc, char **argv)
 	metrics_t metrics;
 	int c, ret;
 	int i;
+	char *unmatched_pfx = NULL;
 	char *fos_fn = NULL, *fom_fn = NULL;
 
 	memset(&opt, '\0', sizeof(opt_t));
@@ -701,7 +707,7 @@ main(int argc, char **argv)
 	opt.fos = stdout;
 	opt.fom = stderr;
 
-	while ((c = getopt(argc, argv, "o:m:p:1:2:")) != -1) {
+	while ((c = getopt(argc, argv, "o:m:p:u:1:2:")) != -1) {
 		switch (c) {
 			case 'o':
 				fos_fn = optarg;
@@ -711,6 +717,9 @@ main(int argc, char **argv)
 				break;
 			case 'p':
 				opt.hairpin = optarg;
+				break;
+			case 'u':
+				unmatched_pfx = optarg;
 				break;
 			case '1':
 				opt.fn1 = optarg;
@@ -755,6 +764,24 @@ main(int argc, char **argv)
 		}
 	}
 
+	if (unmatched_pfx) {
+		char *fn;
+		fn = malloc(strlen(unmatched_pfx)+10);
+		sprintf(fn, "%s_r1.fq", unmatched_pfx);
+		opt.f_unmatched_r1 = fopen(fn, "w");
+		if (opt.f_unmatched_r1 == NULL) {
+			fprintf(stderr, "Error: %s: %s\n", fn, strerror(errno));
+			usage(argv[0]);
+		}
+		sprintf(fn, "%s_r2.fq", unmatched_pfx);
+		opt.f_unmatched_r2 = fopen(fn, "w");
+		if (opt.f_unmatched_r2 == NULL) {
+			fprintf(stderr, "Error: %s: %s\n", fn, strerror(errno));
+			usage(argv[0]);
+		}
+		free(fn);
+	}
+
 	metrics.seqmap = kh_init(str);
 	ret = foldreads_pe(&opt, &metrics);
 
@@ -766,6 +793,11 @@ main(int argc, char **argv)
 	kh_destroy(str, metrics.seqmap);
 
 	free(opt.rhairpin);
+
+	if (unmatched_pfx) {
+		fclose(opt.f_unmatched_r1);
+		fclose(opt.f_unmatched_r2);
+	}
 
 	if (fos_fn)
 		fclose(opt.fos);
