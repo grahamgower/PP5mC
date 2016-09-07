@@ -33,7 +33,6 @@ KHASH_SET_INIT_STR(str);
 #define max(a,b) ((a)>(b)?(a):(b))
 
 typedef struct {
-	int bisulfite; // Input data is from a bisulfite treated library.
 	char *hairpin, *rhairpin; // Hairpin sequence, reverse complement.
 	size_t hlen; // Hairpin length.
 	char *fn1, *fn2; // Input filenames.
@@ -233,7 +232,7 @@ fold(const opt_t *opt, metrics_t *metrics,
 			ds_pairs[nt_idx]++;
 
 		if (c1 == c2) {
-			if (opt->bisulfite && (c2 == 'C' || c2 == 'G'))
+			if (c2 == 'C' || c2 == 'G')
 				// Unconverted C<->G.
 				c2 = tolower(c2);
 			s_out[i] = c2;
