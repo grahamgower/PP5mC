@@ -1,11 +1,15 @@
-TARGET=foldreads
-OBJS=foldreads.o
-CFLAGS=-Wall -g -O2 -funroll-loops
-LDFLAGS=
-LIBS=-Wl,-Bstatic -lz -Wl,-Bdynamic
+HTSDIR=../../../htslib
+CFLAGS=-I$(HTSDIR) -Wall -g -O2 #-funroll-loops
+LDFLAGS=-L$(HTSDIR)
+LIBS= #-Wl,-Bstatic -lhts -lz -Wl,-Bdynamic -lm
 
-$(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) $< -o $(TARGET) $(LDFLAGS) $(LIBS)
+all: foldreads mark_5mC
+
+foldreads: foldreads.o
+	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) -Wl,-Bstatic -lz -Wl,-Bdynamic -lm
+
+mark_5mC: mark_5mC.o
+	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) -Wl,-Bstatic -lhts -lz -Wl,-Bdynamic -pthread
 
 clean:
-	rm -f $(OBJS) $(TARGET)
+	rm -f *.o foldreads mark_5mC
