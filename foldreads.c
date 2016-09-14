@@ -356,17 +356,13 @@ fold(const opt_t *opt, metrics_t *metrics,
 			switch (s_out[i]) {
 				case 'C':
 					// CpG?
-					if (s_out[i+1] == 'G')
+					if (s_out[i+1] == 'G' || s_out[i+1] == 'g')
 						metrics->p.cpg.u++;
-					else if (s_out[i+1] == 'g')
-						metrics->p.cpg.h++;
 					else {
 						// CHG?
 						if (i+2 < last_idx && s_out[i+1] != 'N') {
-							if (s_out[i+2] == 'G')
+							if (s_out[i+2] == 'G' || s_out[i+2] == 'g')
 								metrics->p.chg.u++;
-							else if (s_out[i+2] == 'g')
-								metrics->p.chg.h++;
 							else {
 								// CHH?
 								if (s_out[i+2] != 'N') {
@@ -404,19 +400,15 @@ fold(const opt_t *opt, metrics_t *metrics,
 			switch (s_out[j]) {
 				case 'G':
 					// GpC?
-					if (s_out[j-1] == 'C')
+					if (s_out[j-1] == 'C' || s_out[j-1] == 'c')
 						metrics->m.cpg.u++;
-					else if (s_out[j-1] == 'c')
-						metrics->m.cpg.h++;
 					else {
-						// CHG?
+						// GHC?
 						if (j-2 > 0 && s_out[j-1] != 'N') {
-							if (s_out[j-2] == 'C')
+							if (s_out[j-2] == 'C' || s_out[j-2] == 'c')
 								metrics->m.chg.u++;
-							else if (s_out[j-2] == 'c')
-								metrics->m.chg.h++;
 							else {
-								// CHH?
+								// HHC?
 								if (s_out[j-2] != 'N') {
 									metrics->m.chh.u++;
 								}
@@ -425,20 +417,20 @@ fold(const opt_t *opt, metrics_t *metrics,
 					}
 					break;
 				case 'g':
-					// cpG?
+					// Gpc?
 					if (s_out[j-1] == 'C')
 						metrics->m.cpg.h++;
 					else if (s_out[j-1] == 'c')
 						metrics->m.cpg.m++;
 					else {
-						// cHG?
+						// GHc?
 						if (j-2 > 0 && s_out[j-1] != 'N') {
 							if (s_out[j-2] == 'C')
 								metrics->m.chg.h++;
 							else if (s_out[j-2] == 'c')
 								metrics->m.chg.m++;
 							else {
-								// cHH?
+								// HHc?
 								if (s_out[j-2] != 'N') {
 									metrics->m.chh.m++;
 								}
@@ -609,16 +601,16 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 			(double)metrics->ntcomp[3]/total_bases,
 			(double)(metrics->ntcomp[1]+metrics->ntcomp[2])/total_bases);
 	fprintf(fp, "Methylation frequency (+): CpG=%lf, CHG=%lf, CHH=%lf\n",
-			(double)(2*metrics->p.cpg.m+metrics->p.cpg.h) / (2*metrics->p.cpg.m+metrics->p.cpg.h+2*metrics->p.cpg.u),
-			(double)(2*metrics->p.chg.m+metrics->p.chg.h) / (2*metrics->p.chg.m+metrics->p.chg.h+2*metrics->p.chg.u),
+			(double)(metrics->p.cpg.m+metrics->p.cpg.h) / (metrics->p.cpg.m+metrics->p.cpg.h+metrics->p.cpg.u),
+			(double)(metrics->p.chg.m+metrics->p.chg.h) / (metrics->p.chg.m+metrics->p.chg.h+metrics->p.chg.u),
 			(double)(metrics->p.chh.m) / (metrics->p.chg.m+metrics->p.chg.u));
 	fprintf(fp, "Methylation frequency (-): CpG=%lf, CHG=%lf, CHH=%lf\n",
-			(double)(2*metrics->m.cpg.m+metrics->m.cpg.h) / (2*metrics->m.cpg.m+metrics->m.cpg.h+2*metrics->m.cpg.u),
-			(double)(2*metrics->m.chg.m+metrics->m.chg.h) / (2*metrics->m.chg.m+metrics->m.chg.h+2*metrics->m.chg.u),
+			(double)(metrics->m.cpg.m+metrics->m.cpg.h) / (metrics->m.cpg.m+metrics->m.cpg.h+metrics->m.cpg.u),
+			(double)(metrics->m.chg.m+metrics->m.chg.h) / (metrics->m.chg.m+metrics->m.chg.h+metrics->m.chg.u),
 			(double)(metrics->m.chh.m) / (metrics->m.chg.m+metrics->m.chg.u));
 	fprintf(fp, "Hemimethylation frequency (+/- discordance): CpG=%lf, CHG=%lf\n",
-			(double)(metrics->p.cpg.h+metrics->m.cpg.h)/(2*metrics->p.cpg.m+metrics->p.cpg.h+2*metrics->p.cpg.u + 2*metrics->m.cpg.m+metrics->m.cpg.h+2*metrics->m.cpg.u),
-			(double)(metrics->p.chg.h+metrics->m.chg.h)/(2*metrics->p.chg.m+metrics->p.chg.h+2*metrics->p.chg.u + 2*metrics->m.chg.m+metrics->m.chg.h+2*metrics->m.chg.u));
+			(double)(metrics->p.cpg.h+metrics->m.cpg.h)/(metrics->p.cpg.m+metrics->p.cpg.h+metrics->p.cpg.u + metrics->m.cpg.m+metrics->m.cpg.h+metrics->m.cpg.u),
+			(double)(metrics->p.chg.h+metrics->m.chg.h)/(metrics->p.chg.m+metrics->p.chg.h+metrics->p.chg.u + metrics->m.chg.m+metrics->m.chg.h+metrics->m.chg.u));
 
 	// Nucleotide composition of the hairpin.
 	for (i=0; i<opt->hlen; i++)
