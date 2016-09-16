@@ -7,6 +7,7 @@ matplotlib.use('Agg') # don't try to use $DISPLAY
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.gridspec as gridspec
+import matplotlib.patches as mpatches
 from pylab import setp
 import numpy as np
 
@@ -78,8 +79,8 @@ if __name__ == "__main__":
     plot_file = sys.argv[2] if len(sys.argv) == 3 else "plot_fold_log.pdf"
     pdf = PdfPages(plot_file)
 
-    fig_w, fig_h = plt.figaspect(9.0/16.0)
-    #fig_w, fig_h = plt.figaspect(3.0/4.0)
+    #fig_w, fig_h = plt.figaspect(9.0/16.0)
+    fig_w, fig_h = plt.figaspect(3.0/4.0)
     fig1 = plt.figure(figsize=(fig_w, fig_h))
 
     gs1 = gridspec.GridSpec(2, 7)
@@ -99,13 +100,20 @@ if __name__ == "__main__":
         print("Error: left and right pairings do not match.", file=sys.stderr)
         exit(1)
 
+#    xx = 25
+#    pos_l = pos_l[:xx]
+#    pos_r = pos_r[:xx]
+#    for pair in bpairs:
+#        pairs_l[pair] = pairs_l[pair][:xx]
+#        pairs_r[pair] = pairs_r[pair][:xx]
+
     alpha = 1.0
     hlinestyle = "none"
     plotlinestyle = ":"
 
     for c, m, pair in zip(pal12, markers, bpairs):
         b0,b1 = pair.split("<->")
-        label = b0 + "$\longleftrightarrow$" + b1
+        label = b0 + "/" + b1
 
         if np.mean(pairs_l[pair]) > 0.1:
             ax1.plot(pos_l, pairs_l[pair], color=c, markeredgecolor=c, marker=m, linestyle=plotlinestyle, alpha=alpha, label=label)
@@ -130,12 +138,17 @@ if __name__ == "__main__":
     #setp(ax4.get_yticklabels(), visible=False)
     ax4.yaxis.set_label_position("right")
 
-    ax1.legend(numpoints=1, frameon=False, loc='center left', bbox_to_anchor=(0.975, 0.75))
-    ax3.legend(numpoints=1, frameon=False, loc='center left', bbox_to_anchor=(0.975, 0.75))
+    ax1_handles,ax1_labels = ax1.get_legend_handles_labels()
+    empty = mpatches.Patch(color='white')
+    handles = [empty] + ax1_handles
+    labels = ['+/-'] + ax1_labels
+
+    ax1.legend(handles, labels, numpoints=1, frameon=False, loc='center left', bbox_to_anchor=(0.955, 0.75))
+    ax3.legend(numpoints=1, frameon=False, loc='center left', bbox_to_anchor=(0.955, 0.75))
 
     ax3.set_xlabel("Distance from p5/p7")
     ax4.set_xlabel("Distance from hairpin")
-    ax1.set_ylabel("Frequency", labelpad=30, y=-0.15)
+    ax1.set_ylabel("Frequency", labelpad=20, y=-0.15)
     fig1.suptitle("Observed pairing frequencies")
 
     #plt.tight_layout()
