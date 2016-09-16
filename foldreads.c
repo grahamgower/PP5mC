@@ -561,7 +561,6 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 		}
 	}
 
-
 	seq1 = kseq_init(fp1);
 	seq2 = kseq_init(fp2);
 
@@ -645,9 +644,9 @@ err3:
 		}
 		kh_destroy(str, slist_hash);
 	}
-err2:
 	kseq_destroy(seq2);
 	kseq_destroy(seq1);
+err2:
 	gzclose(fp2);
 err1:
 	gzclose(fp1);
