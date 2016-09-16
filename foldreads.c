@@ -40,6 +40,7 @@ typedef struct {
 	FILE *fom; // File pointer for outputting metrics.
 	FILE *f_unmatched_r1, *f_unmatched_r2; // File pointers for unfolded reads
 	int phred_scale;
+	char *slist_fn;
 } opt_t;
 
 #define N_POS 30
@@ -316,24 +317,26 @@ fold(const opt_t *opt, metrics_t *metrics,
 	if (hairpin == 2) {
 		// Hairpin mismatches
 		int end = last_idx+opt->hlen;
-		for (i=last_idx, j=end-1; i<end; i++, j--) {
-			char c1 = s1[i];
-			char c2 = cmap[(int)s2[j]];
-			char h = opt->hairpin[i-last_idx];
-			int nt_idx;
-			if (c1 != h && c1 != 'N') {
-				// r1 has incorrect base
-				nt_idx = nt2int[(int)h] << 2 | nt2int[(int)c1];
-				metrics->mm_hairpin[nt_idx]++;
+		if (last_idx > 2*DS_DIST_FROM_END) {
+			for (i=last_idx, j=end-1; i<end; i++, j--) {
+				char c1 = s1[i];
+				char c2 = cmap[(int)s2[j]];
+				char h = opt->hairpin[i-last_idx];
+				int nt_idx;
+				if (c1 != h && c1 != 'N') {
+					// r1 has incorrect base
+					nt_idx = nt2int[(int)h] << 2 | nt2int[(int)c1];
+					metrics->mm_hairpin[nt_idx]++;
+				}
+				if (c2 != h && c2 != 'N') {
+					// r2 has incorrect base
+					nt_idx = nt2int[(int)cmap[(int)h]] << 2 | nt2int[(int)s2[j]];
+					metrics->mm_hairpin[nt_idx]++;
+				}
+				static int nterr[256] = {['A']=1, ['C']=1, ['G']=1, ['T']=1, ['N']=1};
+				if (!nterr[(int)c1])
+					fprintf(stderr, "%s\n", s1);
 			}
-			if (c2 != h && c2 != 'N') {
-				// r2 has incorrect base
-				nt_idx = nt2int[(int)cmap[(int)h]] << 2 | nt2int[(int)s2[j]];
-				metrics->mm_hairpin[nt_idx]++;
-			}
-			static int nterr[256] = {['A']=1, ['C']=1, ['G']=1, ['T']=1, ['N']=1};
-			if (!nterr[(int)c1])
-				fprintf(stderr, "%s\n", s1);
 		}
 
 		if (last_idx >= 2*N_POS) {
@@ -472,6 +475,58 @@ seq_write(const char *name, const char *comment, const char *seq, const char *qu
 		fprintf(fs, "@%s\n%s\n+\n%s\n", name, seq, qual);
 }
 
+khash_t(str) *
+parse_slist(char *slist_fn)
+{
+	kstring_t *str;
+	kstream_t *ks;
+	khash_t(str) *h = NULL;
+	gzFile fp;
+	int ret, dret;
+	khint_t k;
+
+	fp = gzopen(slist_fn, "r");
+	if (fp == NULL) {
+		fprintf(stderr, "%s: %s\n", slist_fn, strerror(errno));
+		goto err0;
+	}
+
+	str = calloc(1, sizeof(kstring_t));
+	if (str == NULL) {
+		perror("load_bed: calloc");
+		goto err1;
+	}
+
+	ks = ks_init(fp);
+	h = kh_init(str);
+
+	while (ks_getuntil(ks, KS_SEP_SPACE, str, &dret) >= 0) {
+		k = kh_put(str, h, str->s, &ret);
+		switch (ret) {
+			case -1:
+				fprintf(stderr, "Out of memory\n");
+				exit(1);
+			case 0:
+				// duplicate
+				break;
+			case 1:
+			case 2:
+				// unique
+				kh_key(h, k) = strdup(str->s);
+				break;
+		}
+	}
+
+	ks_destroy(ks);
+	free(str->s);
+	free(str);
+err1:
+	gzclose(fp);
+err0:
+	return h;
+}
+
+
 /*
  */
 int
@@ -482,6 +537,7 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 	int len1, len2;
 	int ret, f;
 	char *s_out, *q_out;
+	khash_t(str) *slist_hash = NULL;
 
 	fp1 = gzopen(opt->fn1, "r");
 	if (fp1 == NULL) {
@@ -497,6 +553,15 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 		goto err1;
 	}
 
+	if (opt->slist_fn) {
+		slist_hash = parse_slist(opt->slist_fn);
+		if (slist_hash == NULL) {
+			ret = 2;
+			goto err2;
+		}
+	}
+
+
 	seq1 = kseq_init(fp1);
 	seq2 = kseq_init(fp2);
 
@@ -505,7 +570,25 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 		len2 = kseq_read(seq2);
 		if (len1 < 0 || len2 < 0)
 			break;
-		
+
+		if (seq1->name.s[seq1->name.l-2] == '/' && seq1->name.s[seq1->name.l-1] == '1' &&
+			seq2->name.s[seq2->name.l-2] == '/' && seq2->name.s[seq2->name.l-1] == '2') {
+			seq1->name.l -= 2;
+			seq1->name.s[seq1->name.l] = 0;
+			seq2->name.l -= 2;
+			seq2->name.s[seq2->name.l] = 0;
+		}
+
+		if (strcmp(seq1->name.s, seq2->name.s)) {
+			fprintf(stderr, "R1 and R2 sequence names don't match:\n%s\n%s\n",
+					seq1->name.s, seq2->name.s);
+			ret = 3;
+			goto err3;
+		}
+
+		if (slist_hash && kh_get(str, slist_hash, seq1->name.s) == kh_end(slist_hash))
+			continue;
+
 		metrics->total_reads++;
 
 		if (len1 < opt->hlen || len2 < opt->hlen)
@@ -513,14 +596,14 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 
 		if (seq1->qual.l == 0) {
 			fprintf(stderr, "%s: qual scores required.\n", opt->fn1);
-			ret = 2;
-			goto err2;
+			ret = 4;
+			goto err3;
 		}
 
 		if (seq2->qual.l == 0) {
 			fprintf(stderr, "%s: qual scores required.\n", opt->fn2);
-			ret = 2;
-			goto err2;
+			ret = 4;
+			goto err3;
 		}
 
 		f = fold(opt, metrics, seq1->seq.s, seq1->qual.s, seq1->seq.l,
@@ -541,18 +624,27 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 
 	if (len1 != -1) {
 		fprintf(stderr, "%s: unexpected end of file.\n", opt->fn1);
-		ret = 3;
-		goto err2;
+		ret = 5;
+		goto err3;
 	}
 
 	if (len2 != -1) {
 		fprintf(stderr, "%s: unexpected end of file.\n", opt->fn2);
-		ret = 3;
-		goto err2;
+		ret = 5;
+		goto err3;
 	}
 
 	ret = 0;
 
+err3:
+	if (slist_hash) {
+		khint_t k;
+		for (k=kh_begin(slist_hash); k!=kh_end(slist_hash); k++) {
+			if (kh_exist(slist_hash, k))
+				free((char *)kh_key(slist_hash, k));
+		}
+		kh_destroy(str, slist_hash);
+	}
 err2:
 	kseq_destroy(seq2);
 	kseq_destroy(seq1);
@@ -562,6 +654,7 @@ err1:
 err0:
 	return ret;
 }
+
 
 void
 print_metrics(const opt_t *opt, const metrics_t *metrics)
@@ -684,14 +777,15 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 void
 usage(char *argv0)
 {
-	fprintf(stderr, "foldreads v3\n");
-	fprintf(stderr, "usage: %s [-o OUT.fq] [-m FILE] [-u PFX] -p SEQ -1 IN1.fq -2 IN2.fq\n", argv0);
-	fprintf(stderr, " -o OUT.fq         Fastq output file [stdout].\n");
-	fprintf(stderr, " -m FILE           Metrics output file [stderr].\n");
-	fprintf(stderr, " -u PFX            Filename prefix for unfolded reads []");
-	fprintf(stderr, " -p SEQ            The hairpin SEQuence.\n");
-	fprintf(stderr, " -1 IN1.fq[.gz]    R1 fastq input file.\n");
-	fprintf(stderr, " -2 IN2.fq[.gz]    R2 fastq input file.\n");
+	fprintf(stderr, "foldreads v4\n");
+	fprintf(stderr, "usage: %s [...] -p SEQ -1 IN1.FQ -2 IN2.FQ\n", argv0);
+	fprintf(stderr, " -o OUT.FQ         Fastq output file [stdout]\n");
+	fprintf(stderr, " -m FILE           Metrics output file [stderr]\n");
+	fprintf(stderr, " -u PREFIX         Filename prefix for unfolded reads []");
+	fprintf(stderr, " -s FILE           Only process reads with names listed in the file []\n");
+	fprintf(stderr, " -p SEQ            The hairpin SEQuence\n");
+	fprintf(stderr, " -1 IN1.FQ[.GZ]    R1 fastq input file\n");
+	fprintf(stderr, " -2 IN2.FQ[.GZ]    R2 fastq input file\n");
 	exit(-1);
 }
 
@@ -711,7 +805,7 @@ main(int argc, char **argv)
 	opt.fom = stderr;
 	opt.phred_scale = 33; // Input phred scale; we always output phred+33.
 
-	while ((c = getopt(argc, argv, "o:m:p:u:1:2:")) != -1) {
+	while ((c = getopt(argc, argv, "o:m:p:s:u:1:2:")) != -1) {
 		switch (c) {
 			case 'o':
 				fos_fn = optarg;
@@ -724,6 +818,9 @@ main(int argc, char **argv)
 				break;
 			case 'u':
 				unmatched_pfx = optarg;
+				break;
+			case 's':
+				opt.slist_fn = optarg;
 				break;
 			case '1':
 				opt.fn1 = optarg;
