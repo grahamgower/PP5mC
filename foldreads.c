@@ -608,8 +608,12 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 		f = fold(opt, metrics, seq1->seq.s, seq1->qual.s, seq1->seq.l,
 			seq2->seq.s, seq2->qual.s, seq2->seq.l, &s_out, &q_out);
 		if (f) {
-			char *comment = seq1->comment.l==0 ? NULL : seq1->comment.s;
-			seq_write(seq1->name.s, comment, s_out, q_out, opt->fos);
+			fprintf(opt->fos,
+					"@%s XF=%s|%s|%s|%s\n%s\n+\n%s\n",
+					seq1->name.s,
+					seq1->seq.s, seq2->seq.s,
+					seq1->qual.s, seq2->qual.s,
+					s_out, q_out);
 			free(s_out);
 			free(q_out);
 			metrics->folded_pairs++;
@@ -776,7 +780,7 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 void
 usage(char *argv0)
 {
-	fprintf(stderr, "foldreads v4\n");
+	fprintf(stderr, "foldreads v5\n");
 	fprintf(stderr, "usage: %s [...] -p SEQ -1 IN1.FQ -2 IN2.FQ\n", argv0);
 	fprintf(stderr, " -o OUT.FQ         Fastq output file [stdout]\n");
 	fprintf(stderr, " -m FILE           Metrics output file [stderr]\n");
