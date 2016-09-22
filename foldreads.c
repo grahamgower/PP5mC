@@ -609,7 +609,7 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 			seq2->seq.s, seq2->qual.s, seq2->seq.l, &s_out, &q_out);
 		if (f) {
 			fprintf(opt->fos,
-					"@%s XF=%s|%s|%s|%s\n%s\n+\n%s\n",
+					"@%s XF:Z:%s|%s|%s|%s\n%s\n+\n%s\n",
 					seq1->name.s,
 					seq1->seq.s, seq2->seq.s,
 					seq1->qual.s, seq2->qual.s,
