@@ -570,8 +570,10 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 		if (len1 < 0 || len2 < 0)
 			break;
 
-		if (seq1->name.s[seq1->name.l-2] == '/' && seq1->name.s[seq1->name.l-1] == '1' &&
-			seq2->name.s[seq2->name.l-2] == '/' && seq2->name.s[seq2->name.l-1] == '2') {
+		if ((seq1->name.s[seq1->name.l-2] == '/' && seq1->name.s[seq1->name.l-1] == '1' &&
+			seq2->name.s[seq2->name.l-2] == '/' && seq2->name.s[seq2->name.l-1] == '2')
+		  || (seq1->name.s[seq1->name.l-2] == '.' && seq1->name.s[seq1->name.l-1] == '1' &&
+			seq2->name.s[seq2->name.l-2] == '.' && seq2->name.s[seq2->name.l-1] == '2')) {
 			seq1->name.l -= 2;
 			seq1->name.s[seq1->name.l] = 0;
 			seq2->name.l -= 2;
@@ -784,7 +786,7 @@ usage(char *argv0)
 	fprintf(stderr, "usage: %s [...] -p SEQ -1 IN1.FQ -2 IN2.FQ\n", argv0);
 	fprintf(stderr, " -o OUT.FQ         Fastq output file [stdout]\n");
 	fprintf(stderr, " -m FILE           Metrics output file [stderr]\n");
-	fprintf(stderr, " -u PREFIX         Filename prefix for unfolded reads []");
+	fprintf(stderr, " -u PREFIX         Filename prefix for unfolded reads []\n");
 	fprintf(stderr, " -s FILE           Only process reads with names listed in the file []\n");
 	fprintf(stderr, " -p SEQ            The hairpin SEQuence\n");
 	fprintf(stderr, " -1 IN1.FQ[.GZ]    R1 fastq input file\n");
