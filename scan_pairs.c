@@ -120,12 +120,12 @@ xf2ssqq(char *xf, char **s1, char **s2, char **q1, char **q2)
 	return len;
 }
 
-#define WIN_SZ 16384
-#define MAX_DP 1000
+#define WIN_SZ (128*1024)
+#define MAX_DP 1024
 #define CTX_SZ 30
 
 int
-wcache_select(uint32_t *win, uint32_t *win_dp, int wi)
+wcache_select(uint8_t *win, uint16_t *win_dp, int wi)
 {
 	int dp;
 	if (wi < 0 || wi >= WIN_SZ)
@@ -151,10 +151,10 @@ scan_pairs(opt_t *opt)
 	int ret;
 
 	int win_tid, win_pos;
-	uint32_t win_dp[WIN_SZ];
-	uint32_t *win;
+	uint16_t win_dp[WIN_SZ];
+	uint8_t *win;
 
-	win = calloc(WIN_SZ*MAX_DP, sizeof(uint32_t));
+	win = calloc(WIN_SZ*MAX_DP, sizeof(uint8_t));
 	if (win == NULL) {
 		perror("calloc");
 		ret = -1;
@@ -206,12 +206,11 @@ scan_pairs(opt_t *opt)
 
 		plpiter = bam_plp_init(next_aln, &bat);
 
-		//memset(win, 0, sizeof(win));
 		memset(win_dp, 0, sizeof(win_dp));
 
 		/*
 		 * Iterate through the pileup to cache nucleotide pairing info
-		 * for a window of WIN_SZ base pairs.
+		 * for a window of WIN_SZ nucleotide pairs.
 		 */
 		while ((plp = bam_plp_auto(plpiter, &tid, &pos, &n)) != 0) {
 
@@ -274,7 +273,7 @@ scan_pairs(opt_t *opt)
 			goto next_window;
 
 		/*
-		 * Iterate through back through the window, accumulating
+		 * Iterate back through the window, accumulating
 		 * pairing information for CTX_SZ bases up/downstream of both
 		 * ends of each read.  Nucleotide pairing info from outside of
 		 * the reads is obtained from win[WIN_SZ], cached above.
