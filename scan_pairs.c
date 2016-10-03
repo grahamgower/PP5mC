@@ -168,7 +168,7 @@ scan_pairs(opt_t *opt)
 	 * ctx3p: The first CTX_SZ slots are upstream of the most 3' position
 	 *        and the latter CTX_SZ slots are downstream of the most 3'.
 	 */
-	uint64_t ctx5p[2*CTX_SZ][16] = {0,}, ctx3p[2*CTX_SZ][16] = {0,};
+	uint64_t ctx5p[2*CTX_SZ][16] = {{0,},}, ctx3p[2*CTX_SZ][16] = {{0,},};
 
 	bat.opt = opt;
 
