@@ -273,9 +273,9 @@ scan_pairs(opt_t *opt)
 			goto next_window;
 
 		/*
-		 * Iterate back through the window, accumulating
+		 * Iterate through each read in the window, accumulating
 		 * pairing information for CTX_SZ bases up/downstream of both
-		 * ends of each read.  Nucleotide pairing info from outside of
+		 * ends of each read.  Nucleotide pairing info adjacent to
 		 * the reads is obtained from win[WIN_SZ], cached above.
 		 */
 		while (sam_itr_next(bat.bam_fp, bat.bam_iter, b) >= 0) {
