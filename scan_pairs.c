@@ -445,6 +445,7 @@ err0:
 void
 usage(char *argv0)
 {
+	fprintf(stderr, "scan_pairs v1\n");
 	fprintf(stderr, "usage: %s [-h HPLEN] in.bam\n", argv0);
 	exit(1);
 }
