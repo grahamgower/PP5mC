@@ -32,6 +32,8 @@ typedef struct {
 	char *bed_fn;
 	int min_mapq;
 	int min_baseq;
+	int min_5;
+	int min_3;
 } opt_t;
 
 typedef struct _bed_entry {
@@ -299,6 +301,9 @@ mark_5mC(opt_t *opt)
 
 			if (p->is_del || p->is_refskip)
 				continue;
+
+			if (p->qpos < opt->min_5 || p->b->core.l_qseq-p->qpos > opt->min_3)
+				continue;
 			
 			if (bam_get_qual(p->b)[p->qpos] < opt->min_baseq)
 				continue;
@@ -395,9 +400,11 @@ usage(char *argv0, opt_t *opt)
 {
 	fprintf(stderr, "mark_5mC v1\n");
 	fprintf(stderr, "usage: %s [...] in.bam\n", argv0);
-	fprintf(stderr, " -b REGIONS.BED    Only count methylation levels for specified regions\n");
+	fprintf(stderr, " -b REGIONS.BED    Count methylation levels for specified regions\n");
 	fprintf(stderr, " -M MAPQ           Minimum mapping quality for a read to be counted [%d]\n", opt->min_mapq);
 	fprintf(stderr, " -B BASEQ          Minimum base quality for a base to be counted [%d]\n", opt->min_baseq);
+	fprintf(stderr, " -5 N              Only count bases at least N bp from the 5' end of a read [%d]\n", opt->min_5);
+	fprintf(stderr, " -3 M              Only count bases at least M bp from the 3' end of a read [%d]\n", opt->min_3);
 	exit(1);
 }
 
@@ -410,8 +417,10 @@ main(int argc, char **argv)
 	memset(&opt, 0, sizeof(opt_t));
 	opt.min_mapq = 25;
 	opt.min_baseq = 10;
+	opt.min_5 = 0;
+	opt.min_3 = 0;
 
-	while ((c = getopt(argc, argv, "b:M:B:")) != -1) {
+	while ((c = getopt(argc, argv, "b:M:B:5:3:")) != -1) {
 		switch (c) {
 			case 'b':
 				opt.bed_fn = optarg;
@@ -427,6 +436,20 @@ main(int argc, char **argv)
 				opt.min_baseq = strtoul(optarg, NULL, 0);
 				if (opt.min_baseq < 0 || opt.min_baseq > 100) {
 					fprintf(stderr, "-B ``%s'' is invalid\n", optarg);
+					usage(argv[0], &opt);
+				}
+				break;
+			case '5':
+				opt.min_5 = strtoul(optarg, NULL, 0);
+				if (opt.min_5 < 0 || opt.min_5 > 10000) {
+					fprintf(stderr, "-5 ``%s'' is invalid\n", optarg);
+					usage(argv[0], &opt);
+				}
+				break;
+			case '3':
+				opt.min_3 = strtoul(optarg, NULL, 0);
+				if (opt.min_3 < 0 || opt.min_3 > 10000) {
+					fprintf(stderr, "-3 ``%s'' is invalid\n", optarg);
 					usage(argv[0], &opt);
 				}
 				break;
