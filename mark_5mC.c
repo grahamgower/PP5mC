@@ -302,7 +302,7 @@ mark_5mC(opt_t *opt)
 			if (p->is_del || p->is_refskip)
 				continue;
 
-			if (p->qpos < opt->min_5 || p->b->core.l_qseq-p->qpos > opt->min_3)
+			if (p->qpos < opt->min_5 || p->b->core.l_qseq-p->qpos < opt->min_3)
 				continue;
 			
 			if (bam_get_qual(p->b)[p->qpos] < opt->min_baseq)
