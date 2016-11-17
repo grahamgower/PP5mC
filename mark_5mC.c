@@ -247,6 +247,17 @@ mark_5mC(opt_t *opt)
 	int i;
 	int ret;
 
+	struct mpos_t {
+		int tid;
+		int pos;
+		int f_C;
+		int f_mC;
+		int r_C;
+		int r_mC;
+	} mpos[2];
+	memset(&mpos, 0, sizeof(struct mpos_t));
+	mpos[0].tid = mpos[1].tid = -1;
+
 	memset(&bat, 0, sizeof(bam_aux_t));
 	bat.opt = opt;
 
@@ -282,7 +293,7 @@ mark_5mC(opt_t *opt)
 	bat.bam_iter = NULL;
 	plpiter = bam_plp_init(next_aln, &bat);
 
-	printf("chrom\tpos-0\tpos-1\tstrand\tdepth\tC\tmC\n");
+	printf("chrom\tpos-0\tpos-1\tcontext\t+C\t+mC\t-C\t-mC\n");
 
 	while ((plp = bam_plp_auto(plpiter, &tid, &pos, &n)) != 0) {
 
@@ -345,31 +356,95 @@ mark_5mC(opt_t *opt)
 			dp++;
 		}
 
-		int f_C = ntpair[nt2int['T']<<2 | nt2int['G']];
-		int f_mC = ntpair[nt2int['C']<<2 | nt2int['G']];
-		int r_C = ntpair[nt2int['G']<<2 | nt2int['T']];
-		int r_mC = ntpair[nt2int['G']<<2 | nt2int['C']];
+		struct mpos_t m;
+		m.tid = tid;
+		m.pos = pos;
+		m.f_C = ntpair[nt2int['T']<<2 | nt2int['G']];
+		m.f_mC = ntpair[nt2int['C']<<2 | nt2int['G']];
+		m.r_C = ntpair[nt2int['G']<<2 | nt2int['T']];
+		m.r_mC = ntpair[nt2int['G']<<2 | nt2int['C']];
 
-		if (f_C || f_mC) {
-			printf("%s\t%d\t%d\t+\t%d\t%d\t%d\n",
+		//printf("chrom\tpos-0\tpos-1\tcontext\t+C\t+mC\t-C\t-mC\n");
+		if ((mpos[1].tid == tid && mpos[1].pos+1 == pos) &&
+		    (mpos[1].f_C || mpos[1].f_mC) && (m.r_C || m.r_mC)) {
+			// CpG
+			printf("%s\t%d\t%d\tCpG\t%d\t%d\t%d\t%d\n",
+					bat.bam_hdr->target_name[tid],
+					mpos[1].pos,
+					pos+1,
+					mpos[1].f_C,
+					mpos[1].f_mC,
+					m.r_C,
+					m.r_mC
+					);
+		} else if ((mpos[0].tid == tid && mpos[0].pos+2 == pos) &&
+		    (mpos[0].f_C || mpos[0].f_mC) && !((mpos[1].r_C || mpos[1].r_mC)) && (m.r_C || m.r_mC)) {
+			// CHG
+			printf("%s\t%d\t%d\tCHG\t%d\t%d\t%d\t%d\n",
+					bat.bam_hdr->target_name[tid],
+					mpos[0].pos,
+					pos+1,
+					mpos[0].f_C,
+					mpos[0].f_mC,
+					m.r_C,
+					m.r_mC
+					);
+		} else if (m.r_C || m.r_mC) {
+			// CHH on reverse strand
+			printf("%s\t%d\t%d\tCHH\t%d\t%d\t%d\t%d\n",
 					bat.bam_hdr->target_name[tid],
 					pos,
 					pos+1,
-					dp,
-					f_C,
-					f_mC
+					0,
+					0,
+					m.r_C,
+					m.r_mC
 					);
-		}
-		if (r_C || r_mC) {
-			printf("%s\t%d\t%d\t-\t%d\t%d\t%d\n",
+		} else if ((mpos[0].f_C || mpos[0].f_mC) &&
+			   ((mpos[0].tid != mpos[1].tid) || !((mpos[1].r_C || mpos[1].r_mC)))) {
+			// CHH on forward strand
+			printf("%s\t%d\t%d\tCHH\t%d\t%d\t%d\t%d\n",
 					bat.bam_hdr->target_name[tid],
-					pos,
-					pos+1,
-					dp,
-					r_C,
-					r_mC
+					mpos[0].pos,
+					mpos[0].pos+1,
+					mpos[0].f_C,
+					mpos[0].f_mC,
+					0,
+					0
 					);
 		}
+
+		memcpy(&mpos[0], &mpos[1], sizeof(struct mpos_t));
+		memcpy(&mpos[1], &m, sizeof(struct mpos_t));
+	}
+
+	/*
+	 * Check final two nucleotides
+	 */
+	if (mpos[0].tid == mpos[1].tid && mpos[0].pos+1 == mpos[1].pos &&
+	   (mpos[0].f_C || mpos[0].f_mC) && !(mpos[1].r_C || mpos[1].r_mC)) {
+		// CHH on forward strand
+		printf("%s\t%d\t%d\tCHH\t%d\t%d\t%d\t%d\n",
+			bat.bam_hdr->target_name[mpos[0].tid],
+			mpos[0].pos,
+			mpos[0].pos+1,
+			mpos[0].f_C,
+			mpos[0].f_mC,
+			0,
+			0
+			);
+	}
+	if (mpos[1].f_C || mpos[1].f_mC) {
+		// CHH on forward strand
+		printf("%s\t%d\t%d\tCHH\t%d\t%d\t%d\t%d\n",
+			bat.bam_hdr->target_name[mpos[1].tid],
+			mpos[1].pos,
+			mpos[1].pos+1,
+			mpos[1].f_C,
+			mpos[1].f_mC,
+			0,
+			0
+			);
 	}
 
 	ret = 0;
@@ -398,7 +473,7 @@ err0:
 void
 usage(char *argv0, opt_t *opt)
 {
-	fprintf(stderr, "mark_5mC v1\n");
+	fprintf(stderr, "mark_5mC v2\n");
 	fprintf(stderr, "usage: %s [...] in.bam\n", argv0);
 	fprintf(stderr, " -b REGIONS.BED    Count methylation levels for specified regions\n");
 	fprintf(stderr, " -M MAPQ           Minimum mapping quality for a read to be counted [%d]\n", opt->min_mapq);
