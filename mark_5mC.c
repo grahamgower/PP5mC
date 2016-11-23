@@ -254,8 +254,7 @@ mark_5mC(opt_t *opt)
 		int f_mC;
 		int r_C;
 		int r_mC;
-	} mpos[2];
-	memset(&mpos, 0, sizeof(struct mpos_t));
+	} mpos[2] = {0,};
 	mpos[0].tid = mpos[1].tid = -1;
 
 	memset(&bat, 0, sizeof(bam_aux_t));
@@ -473,7 +472,7 @@ err0:
 void
 usage(char *argv0, opt_t *opt)
 {
-	fprintf(stderr, "mark_5mC v2\n");
+	fprintf(stderr, "mark_5mC v3\n");
 	fprintf(stderr, "usage: %s [...] in.bam\n", argv0);
 	fprintf(stderr, " -b REGIONS.BED    Count methylation levels for specified regions\n");
 	fprintf(stderr, " -M MAPQ           Minimum mapping quality for a read to be counted [%d]\n", opt->min_mapq);
