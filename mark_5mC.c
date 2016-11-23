@@ -254,7 +254,8 @@ mark_5mC(opt_t *opt)
 		int f_mC;
 		int r_C;
 		int r_mC;
-	} mpos[2] = {0,};
+	} mpos[2];
+	memset(&mpos, 0, sizeof(mpos));
 	mpos[0].tid = mpos[1].tid = -1;
 
 	memset(&bat, 0, sizeof(bam_aux_t));
