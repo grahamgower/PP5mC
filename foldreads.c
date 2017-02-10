@@ -680,7 +680,9 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 	total_bases2 = metrics->match_total + metrics->damage_total + metrics->mm_total;
 
 	fprintf(fp, "Total read pairs: %jd\n", (uintmax_t)metrics->total_reads);
-	fprintf(fp, "Number of successfully folded read pairs: %jd\n", (uintmax_t)metrics->folded_pairs);
+	fprintf(fp, "Number of successfully folded read pairs: %jd (%lf)\n",
+			(uintmax_t)metrics->folded_pairs,
+			(double)metrics->folded_pairs/metrics->total_reads);
 	fprintf(fp, "Number of read pairs with complete hairpin: %jd\n",
 			(uintmax_t)metrics->hairpin_complete);
 	fprintf(fp, "Clonality of folded pairs: %lf\n\n", (double)metrics->clones/metrics->folded_pairs);
