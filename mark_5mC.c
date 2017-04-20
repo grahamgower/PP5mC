@@ -338,15 +338,35 @@ mark_5mC(opt_t *opt)
 				goto err4;
 			}
 
+			int hclip = 0;
 			if (bam_is_rev(p->b)) {
-				ci = cmap[(int)s2[p->b->core.l_qseq - p->qpos-1]];
-				cj = s1[p->b->core.l_qseq - p->qpos-1];
-				//fprintf(stderr, "[-]%s  %d:%d:%d  %c/%c\n", bam_get_qname(p->b), pos, p->qpos, i, ci, cj);
+				if (p->b->core.n_cigar > 1) {
+					if (bam_cigar_op(bam_get_cigar(p->b)[p->b->core.n_cigar-1]) == BAM_CHARD_CLIP)
+						hclip = bam_cigar_oplen(bam_get_cigar(p->b)[p->b->core.n_cigar-1]);
+				}
+				ci = cmap[(int)s2[p->b->core.l_qseq - p->qpos-1 +hclip]];
+				cj = s1[p->b->core.l_qseq - p->qpos-1 +hclip];
 			} else {
-				ci = s1[p->qpos];
-				cj = cmap[(int)s2[p->qpos]];
-				//fprintf(stderr, "[+]%s  %d:%d:%d  %c/%c\n", bam_get_qname(p->b), pos, p->qpos, i, ci, cj);
+				if (p->b->core.n_cigar > 1) {
+					if (bam_cigar_op(bam_get_cigar(p->b)[0]) == BAM_CHARD_CLIP)
+						hclip = bam_cigar_oplen(bam_get_cigar(p->b)[0]);
+				}
+				ci = s1[p->qpos+hclip];
+				cj = cmap[(int)s2[p->qpos+hclip]];
 			}
+
+			/*
+			if (pos == 130) {
+				fprintf(stderr, "[%c] %s  %d:%d S=%c:Q=%d, %c/%c %s[%d]\n",
+						"+-"[bam_is_rev(p->b)],
+						bam_get_qname(p->b),
+						pos,
+						p->qpos,
+						"=ACMGRSVTWYHKDBN"[bam_seqi(bam_get_seq(p->b),p->qpos)],
+						bam_get_qual(p->b)[p->qpos],
+						ci, cj,
+						hclip>0?"HCLIP":"", hclip);
+			}*/
 
 			if (ci == 'N' || cj == 'N')
 				continue;
@@ -473,7 +493,7 @@ err0:
 void
 usage(char *argv0, opt_t *opt)
 {
-	fprintf(stderr, "mark_5mC v3\n");
+	fprintf(stderr, "mark_5mC v4\n");
 	fprintf(stderr, "usage: %s [...] in.bam\n", argv0);
 	fprintf(stderr, " -b REGIONS.BED    Count methylation levels for specified regions\n");
 	fprintf(stderr, " -M MAPQ           Minimum mapping quality for a read to be counted [%d]\n", opt->min_mapq);
