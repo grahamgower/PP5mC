@@ -1,7 +1,7 @@
 /*
  * Print per-site methylation counts.
  *
- * Copyright (c) 2016 Graham Gower <graham.gower@gmail.com>
+ * Copyright (c) 2016,2017 Graham Gower <graham.gower@gmail.com>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -244,12 +244,13 @@ mark_5mC(opt_t *opt)
 	bam_plp_t plpiter;
 	const bam_pileup1_t *plp;
 	int tid, pos, n;
-	int i;
+	int i, j;
 	int ret;
 
 	struct mpos_t {
 		int tid;
 		int pos;
+		int c, g;
 		int f_C;
 		int f_mC;
 		int r_C;
@@ -300,8 +301,9 @@ mark_5mC(opt_t *opt)
 		if (bat.bam_iter && (pos < bat.bam_iter->beg || pos > bat.bam_iter->end))
 			continue;
 
-		int dp = 0;
 		int ntpair[16] = {0,};
+		int nt[16] = {0,};
+		int majority = 0, majority_base = -1;
 
 		for (i=0; i<n; i++) {
 			const bam_pileup1_t *p = plp + i;
@@ -309,13 +311,14 @@ mark_5mC(opt_t *opt)
 			char *xf;
 			char *s1, *s2, *q1, *q2;
 			int ci, cj;
+			int qi, qj;
 
 			if (p->is_del || p->is_refskip)
 				continue;
 
 			if (p->qpos < opt->min_5 || p->b->core.l_qseq-p->qpos < opt->min_3)
 				continue;
-			
+
 			if (bam_get_qual(p->b)[p->qpos] < opt->min_baseq)
 				continue;
 
@@ -346,6 +349,8 @@ mark_5mC(opt_t *opt)
 				}
 				ci = cmap[(int)s2[p->b->core.l_qseq - p->qpos-1 +hclip]];
 				cj = s1[p->b->core.l_qseq - p->qpos-1 +hclip];
+				qi = q2[p->b->core.l_qseq - p->qpos-1 +hclip];
+				qj = q1[p->b->core.l_qseq - p->qpos-1 +hclip];
 			} else {
 				if (p->b->core.n_cigar > 1) {
 					if (bam_cigar_op(bam_get_cigar(p->b)[0]) == BAM_CHARD_CLIP)
@@ -353,11 +358,13 @@ mark_5mC(opt_t *opt)
 				}
 				ci = s1[p->qpos+hclip];
 				cj = cmap[(int)s2[p->qpos+hclip]];
+				qi = q1[p->qpos+hclip];
+				qj = q2[p->qpos+hclip];
 			}
 
 			/*
 			if (pos == 130) {
-				fprintf(stderr, "[%c] %s  %d:%d S=%c:Q=%d, %c/%c %s[%d]\n",
+				fprintf(stderr, "[%c] %s  %d:%d S=%c:Q=%d, S=%c/%c Q=%c/%c %s[%d]\n",
 						"+-"[bam_is_rev(p->b)],
 						bam_get_qname(p->b),
 						pos,
@@ -365,20 +372,48 @@ mark_5mC(opt_t *opt)
 						"=ACMGRSVTWYHKDBN"[bam_seqi(bam_get_seq(p->b),p->qpos)],
 						bam_get_qual(p->b)[p->qpos],
 						ci, cj,
+						qi, qj,
 						hclip>0?"HCLIP":"", hclip);
 			}*/
 
-			if (ci == 'N' || cj == 'N')
+			if (qi < opt->min_baseq || qj < opt->min_baseq)
 				continue;
 
 			int pair = nt2int[(int)ci]<<2 | nt2int[(int)cj];
 			ntpair[pair]++;
-			dp++;
+
+			int base = bam_seqi(bam_get_seq(p->b),p->qpos);
+			nt[base]++;
+			if (nt[base] > majority) {
+				majority = nt[base];
+				majority_base = base;
+			}
+		}
+
+		int n_majorities = 0;
+		for (j=0; j<16; j++) {
+			if (nt[j] == majority)
+				n_majorities++;
+		}
+
+		if (n_majorities > 1) {
+			// tied for majority base, pick one at random
+			static unsigned short xsubi[3] = {31,41,59}; // random state
+			int maj_k = nrand48(xsubi) % n_majorities;
+			int k;
+			for (j=0, k=0; j<16; j++) {
+				if (nt[j] == majority && k++ == maj_k) {
+					majority_base = j;
+					break;
+				}
+			}
 		}
 
 		struct mpos_t m;
 		m.tid = tid;
 		m.pos = pos;
+		m.c = majority_base == 2 ? 1: 0;
+		m.g = majority_base == 4 ? 1: 0;
 		m.f_C = ntpair[nt2int['T']<<2 | nt2int['G']];
 		m.f_mC = ntpair[nt2int['C']<<2 | nt2int['G']];
 		m.r_C = ntpair[nt2int['G']<<2 | nt2int['T']];
@@ -386,7 +421,7 @@ mark_5mC(opt_t *opt)
 
 		//printf("chrom\tpos-0\tpos-1\tcontext\t+C\t+mC\t-C\t-mC\n");
 		if ((mpos[1].tid == tid && mpos[1].pos+1 == pos) &&
-		    (mpos[1].f_C || mpos[1].f_mC) && (m.r_C || m.r_mC)) {
+		    mpos[1].c && m.g) {
 			// CpG
 			printf("%s\t%d\t%d\tCpG\t%d\t%d\t%d\t%d\n",
 					bat.bam_hdr->target_name[tid],
@@ -398,7 +433,7 @@ mark_5mC(opt_t *opt)
 					m.r_mC
 					);
 		} else if ((mpos[0].tid == tid && mpos[0].pos+2 == pos) &&
-		    (mpos[0].f_C || mpos[0].f_mC) && !((mpos[1].r_C || mpos[1].r_mC)) && (m.r_C || m.r_mC)) {
+		    mpos[0].c && !mpos[1].g && m.g) {
 			// CHG
 			printf("%s\t%d\t%d\tCHG\t%d\t%d\t%d\t%d\n",
 					bat.bam_hdr->target_name[tid],
@@ -409,7 +444,7 @@ mark_5mC(opt_t *opt)
 					m.r_C,
 					m.r_mC
 					);
-		} else if (m.r_C || m.r_mC) {
+		} else if (m.g) {
 			// CHH on reverse strand
 			printf("%s\t%d\t%d\tCHH\t%d\t%d\t%d\t%d\n",
 					bat.bam_hdr->target_name[tid],
@@ -420,8 +455,8 @@ mark_5mC(opt_t *opt)
 					m.r_C,
 					m.r_mC
 					);
-		} else if ((mpos[0].f_C || mpos[0].f_mC) &&
-			   ((mpos[0].tid != mpos[1].tid) || !((mpos[1].r_C || mpos[1].r_mC)))) {
+		} else if (mpos[0].c &&
+			   ((mpos[0].tid != mpos[1].tid) || !mpos[1].g)) {
 			// CHH on forward strand
 			printf("%s\t%d\t%d\tCHH\t%d\t%d\t%d\t%d\n",
 					bat.bam_hdr->target_name[tid],
@@ -442,7 +477,7 @@ mark_5mC(opt_t *opt)
 	 * Check final two nucleotides
 	 */
 	if (mpos[0].tid == mpos[1].tid && mpos[0].pos+1 == mpos[1].pos &&
-	   (mpos[0].f_C || mpos[0].f_mC) && !(mpos[1].r_C || mpos[1].r_mC)) {
+	   mpos[0].c && !mpos[1].g) {
 		// CHH on forward strand
 		printf("%s\t%d\t%d\tCHH\t%d\t%d\t%d\t%d\n",
 			bat.bam_hdr->target_name[mpos[0].tid],
@@ -454,7 +489,7 @@ mark_5mC(opt_t *opt)
 			0
 			);
 	}
-	if (mpos[1].f_C || mpos[1].f_mC) {
+	if (mpos[1].c) {
 		// CHH on forward strand
 		printf("%s\t%d\t%d\tCHH\t%d\t%d\t%d\t%d\n",
 			bat.bam_hdr->target_name[mpos[1].tid],
@@ -493,7 +528,7 @@ err0:
 void
 usage(char *argv0, opt_t *opt)
 {
-	fprintf(stderr, "mark_5mC v4\n");
+	fprintf(stderr, "mark_5mC v5\n");
 	fprintf(stderr, "usage: %s [...] in.bam\n", argv0);
 	fprintf(stderr, " -b REGIONS.BED    Count methylation levels for specified regions\n");
 	fprintf(stderr, " -M MAPQ           Minimum mapping quality for a read to be counted [%d]\n", opt->min_mapq);
