@@ -224,7 +224,7 @@ fold(const opt_t *opt, metrics_t *metrics,
 		if (c1 == 'N' || c2 == 'N') {
 			// Use the other read, if we can.
 			s_out[i] = c2 == 'N' ? c1 : c2;
-			q_out[i] = c2 == 'N' ? q1[i] : q2[i];
+			q_out[i] = (c2 == 'N' ? q1[i] : q2[i]) -opt->phred_scale + 33;
 			continue;
 		}
 
