@@ -253,8 +253,10 @@ mark_5mC(opt_t *opt)
 		int c, g;
 		int f_C;
 		int f_mC;
+		int f_H;
 		int r_C;
 		int r_mC;
+		int r_H;
 	} mpos[2];
 	memset(&mpos, 0, sizeof(mpos));
 	mpos[0].tid = mpos[1].tid = -1;
@@ -349,8 +351,8 @@ mark_5mC(opt_t *opt)
 				}
 				ci = cmap[(int)s2[p->b->core.l_qseq - p->qpos-1 +hclip]];
 				cj = s1[p->b->core.l_qseq - p->qpos-1 +hclip];
-				qi = q2[p->b->core.l_qseq - p->qpos-1 +hclip];
-				qj = q1[p->b->core.l_qseq - p->qpos-1 +hclip];
+				qi = q2[p->b->core.l_qseq - p->qpos-1 +hclip] - 33;
+				qj = q1[p->b->core.l_qseq - p->qpos-1 +hclip] - 33;
 			} else {
 				if (p->b->core.n_cigar > 1) {
 					if (bam_cigar_op(bam_get_cigar(p->b)[0]) == BAM_CHARD_CLIP)
@@ -358,13 +360,13 @@ mark_5mC(opt_t *opt)
 				}
 				ci = s1[p->qpos+hclip];
 				cj = cmap[(int)s2[p->qpos+hclip]];
-				qi = q1[p->qpos+hclip];
-				qj = q2[p->qpos+hclip];
+				qi = q1[p->qpos+hclip] - 33;
+				qj = q2[p->qpos+hclip] - 33;
 			}
 
 			/*
-			if (pos == 130) {
-				fprintf(stderr, "[%c] %s  %d:%d S=%c:Q=%d, S=%c/%c Q=%c/%c %s[%d]\n",
+			if (pos == 1524196) {
+				fprintf(stderr, "[%c] %s  %d:%d S=%c:Q=%d, S=%c/%c Q=%d/%d %s[%d]\n",
 						"+-"[bam_is_rev(p->b)],
 						bam_get_qname(p->b),
 						pos,
@@ -390,21 +392,23 @@ mark_5mC(opt_t *opt)
 			}
 		}
 
-		int n_majorities = 0;
-		for (j=0; j<16; j++) {
-			if (nt[j] == majority)
-				n_majorities++;
-		}
+		if (majority > 0) {
+			int n_majorities = 0;
+			for (j=0; j<16; j++) {
+				if (nt[j] == majority)
+					n_majorities++;
+			}
 
-		if (n_majorities > 1) {
-			// tied for majority base, pick one at random
-			static unsigned short xsubi[3] = {31,41,59}; // random state
-			int maj_k = nrand48(xsubi) % n_majorities;
-			int k;
-			for (j=0, k=0; j<16; j++) {
-				if (nt[j] == majority && k++ == maj_k) {
-					majority_base = j;
-					break;
+			if (n_majorities > 1) {
+				// tied for majority base, pick one at random
+				static unsigned short xsubi[3] = {31,41,59}; // random state
+				int maj_k = nrand48(xsubi) % n_majorities;
+				int k;
+				for (j=0, k=0; j<16; j++) {
+					if (nt[j] == majority && k++ == maj_k) {
+						majority_base = j;
+						break;
+					}
 				}
 			}
 		}
@@ -412,18 +416,21 @@ mark_5mC(opt_t *opt)
 		struct mpos_t m;
 		m.tid = tid;
 		m.pos = pos;
-		m.c = majority_base == 2 ? 1: 0;
-		m.g = majority_base == 4 ? 1: 0;
 		m.f_C = ntpair[nt2int['T']<<2 | nt2int['G']];
 		m.f_mC = ntpair[nt2int['C']<<2 | nt2int['G']];
 		m.r_C = ntpair[nt2int['G']<<2 | nt2int['T']];
 		m.r_mC = ntpair[nt2int['G']<<2 | nt2int['C']];
+		m.c = (majority_base == 2 && m.f_C+m.f_mC) ? 1: 0;
+		m.g = (majority_base == 4 && m.r_C+m.r_mC) ? 1: 0;
+		m.f_H = (majority_base == 1 || majority_base == 2 || majority_base == 8) ? 1: 0;
+		m.r_H = (majority_base == 1 || majority_base == 4 || majority_base == 8) ? 1: 0;
 
 		//printf("chrom\tpos-0\tpos-1\tcontext\t+C\t+mC\t-C\t-mC\n");
-		if ((mpos[1].tid == tid && mpos[1].pos+1 == pos) &&
-		    mpos[1].c && m.g) {
-			// CpG
-			printf("%s\t%d\t%d\tCpG\t%d\t%d\t%d\t%d\n",
+		if (mpos[0].tid == tid && mpos[0].pos+2 == pos) {
+			// 3 consecutive coordinates
+			if (mpos[1].c && m.g) {
+				// NCG
+				printf("%s\t%d\t%d\tCpG\t%d\t%d\t%d\t%d\n",
 					bat.bam_hdr->target_name[tid],
 					mpos[1].pos,
 					pos+1,
@@ -432,10 +439,9 @@ mark_5mC(opt_t *opt)
 					m.r_C,
 					m.r_mC
 					);
-		} else if ((mpos[0].tid == tid && mpos[0].pos+2 == pos) &&
-		    mpos[0].c && !mpos[1].g && m.g) {
-			// CHG
-			printf("%s\t%d\t%d\tCHG\t%d\t%d\t%d\t%d\n",
+			} else if (mpos[0].c && (mpos[1].f_H && mpos[1].r_H) && m.g) {
+				// CHG
+				printf("%s\t%d\t%d\tCHG\t%d\t%d\t%d\t%d\n",
 					bat.bam_hdr->target_name[tid],
 					mpos[0].pos,
 					pos+1,
@@ -444,21 +450,9 @@ mark_5mC(opt_t *opt)
 					m.r_C,
 					m.r_mC
 					);
-		} else if (m.g) {
-			// CHH on reverse strand
-			printf("%s\t%d\t%d\tCHH\t%d\t%d\t%d\t%d\n",
-					bat.bam_hdr->target_name[tid],
-					pos,
-					pos+1,
-					0,
-					0,
-					m.r_C,
-					m.r_mC
-					);
-		} else if (mpos[0].c &&
-			   ((mpos[0].tid != mpos[1].tid) || !mpos[1].g)) {
-			// CHH on forward strand
-			printf("%s\t%d\t%d\tCHH\t%d\t%d\t%d\t%d\n",
+			} else if (mpos[0].c && mpos[1].f_H && m.f_H) {
+				// CHH on forward strand
+				printf("%s\t%d\t%d\tCHH\t%d\t%d\t%d\t%d\n",
 					bat.bam_hdr->target_name[tid],
 					mpos[0].pos,
 					mpos[0].pos+1,
@@ -467,40 +461,39 @@ mark_5mC(opt_t *opt)
 					0,
 					0
 					);
+			} else if (mpos[0].r_H && mpos[1].r_H && m.g) {
+				// CHH on reverse strand
+				printf("%s\t%d\t%d\tCHH\t%d\t%d\t%d\t%d\n",
+					bat.bam_hdr->target_name[tid],
+					pos,
+					pos+1,
+					0,
+					0,
+					m.r_C,
+					m.r_mC
+					);
+			}
+
+		} else if (mpos[1].tid == tid && mpos[1].pos+1 == pos) {
+			// 2 consecutive coordinates
+			if (mpos[1].c && m.g) {
+				// CG
+				printf("%s\t%d\t%d\tCpG\t%d\t%d\t%d\t%d\n",
+					bat.bam_hdr->target_name[tid],
+					mpos[1].pos,
+					pos+1,
+					mpos[1].f_C,
+					mpos[1].f_mC,
+					m.r_C,
+					m.r_mC
+					);
+			}
 		}
 
 		memcpy(&mpos[0], &mpos[1], sizeof(struct mpos_t));
 		memcpy(&mpos[1], &m, sizeof(struct mpos_t));
 	}
 
-	/*
-	 * Check final two nucleotides
-	 */
-	if (mpos[0].tid == mpos[1].tid && mpos[0].pos+1 == mpos[1].pos &&
-	   mpos[0].c && !mpos[1].g) {
-		// CHH on forward strand
-		printf("%s\t%d\t%d\tCHH\t%d\t%d\t%d\t%d\n",
-			bat.bam_hdr->target_name[mpos[0].tid],
-			mpos[0].pos,
-			mpos[0].pos+1,
-			mpos[0].f_C,
-			mpos[0].f_mC,
-			0,
-			0
-			);
-	}
-	if (mpos[1].c) {
-		// CHH on forward strand
-		printf("%s\t%d\t%d\tCHH\t%d\t%d\t%d\t%d\n",
-			bat.bam_hdr->target_name[mpos[1].tid],
-			mpos[1].pos,
-			mpos[1].pos+1,
-			mpos[1].f_C,
-			mpos[1].f_mC,
-			0,
-			0
-			);
-	}
 
 	ret = 0;
 err4:
