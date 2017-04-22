@@ -23,6 +23,7 @@
 #include <errno.h>
 
 #include <htslib/sam.h>
+#include <htslib/faidx.h>
 
 #include "kseq.h"
 KSTREAM_INIT(int, read, 16384);
@@ -30,6 +31,7 @@ KSTREAM_INIT(int, read, 16384);
 typedef struct {
 	char *bam_fn;
 	char *bed_fn;
+	char *fasta_fn;
 	int min_mapq;
 	int min_baseq;
 	int min_5;
@@ -243,6 +245,10 @@ mark_5mC(opt_t *opt)
 	bam_aux_t bat;
 	bam_plp_t plpiter;
 	const bam_pileup1_t *plp;
+	faidx_t *fai = NULL;
+	char *ref = NULL;
+	int ref_tid = -1;
+	int ref_len;
 	int tid, pos, n;
 	int i, j;
 	int ret;
@@ -293,6 +299,14 @@ mark_5mC(opt_t *opt)
 		}
 	}
 
+	if (opt->fasta_fn) {
+		fai = fai_load(opt->fasta_fn);
+		if (fai == NULL) {
+			ret = -5;
+			goto err4;
+		}
+	}
+
 	bat.bam_iter = NULL;
 	plpiter = bam_plp_init(next_aln, &bat);
 
@@ -305,7 +319,8 @@ mark_5mC(opt_t *opt)
 
 		int ntpair[16] = {0,};
 		int nt[16] = {0,};
-		int majority = 0, majority_base = -1;
+		int majority = 0;
+		char majority_base = 0;
 
 		for (i=0; i<n; i++) {
 			const bam_pileup1_t *p = plp + i;
@@ -327,20 +342,20 @@ mark_5mC(opt_t *opt)
 			xf_aux = bam_aux_get(p->b, "XF");
 			if (xf_aux == NULL) {
 				fprintf(stderr, "%s:%d: missing auxiliary field XF:Z\n", bam_get_qname(p->b), pos);
-				ret = -5;
-				goto err4;
+				ret = -6;
+				goto err5;
 			}
 			xf = bam_aux2Z(xf_aux);
 			if (xf == NULL) {
 				fprintf(stderr, "%s:%d: invalid auxiliary field XF, not XF:Z\n", bam_get_qname(p->b), pos);
-				ret = -6;
-				goto err4;
+				ret = -7;
+				goto err5;
 			}
 
 			if (xf2ssqq(xf, &s1, &s2, &q1, &q2) < 0) {
 				fprintf(stderr, "%s:%d: invalid auxiliary field XF:Z, not created by foldreads\n", bam_get_qname(p->b), pos);
-				ret = -7;
-				goto err4;
+				ret = -8;
+				goto err5;
 			}
 
 			int hclip = 0;
@@ -384,15 +399,61 @@ mark_5mC(opt_t *opt)
 			int pair = nt2int[(int)ci]<<2 | nt2int[(int)cj];
 			ntpair[pair]++;
 
-			int base = bam_seqi(bam_get_seq(p->b),p->qpos);
-			nt[base]++;
-			if (nt[base] > majority) {
-				majority = nt[base];
-				majority_base = base;
+			if (!opt->fasta_fn) {
+				int base = bam_seqi(bam_get_seq(p->b),p->qpos);
+				nt[base]++;
+				if (nt[base] > majority) {
+					majority = nt[base];
+					majority_base = "=ACMGRSVTWYHKDBN"[base];
+				}
 			}
 		}
 
-		if (majority > 0) {
+
+
+		struct mpos_t m;
+		m.tid = tid;
+		m.pos = pos;
+		m.f_C = ntpair[nt2int['T']<<2 | nt2int['G']];
+		m.f_mC = ntpair[nt2int['C']<<2 | nt2int['G']];
+		m.r_C = ntpair[nt2int['G']<<2 | nt2int['T']];
+		m.r_mC = ntpair[nt2int['G']<<2 | nt2int['C']];
+
+		if (opt->fasta_fn) {
+			// use reference for context
+			if (ref_tid != tid) {
+				if (ref)
+					free(ref);
+				ref = NULL;
+				ref_len = faidx_seq_len(fai, bat.bam_hdr->target_name[tid]);
+				if (ref_len == -1) {
+					fprintf(stderr, "%s has region `%s', which is not in %s\n",
+							opt->bam_fn,
+							bat.bam_hdr->target_name[tid],
+							opt->fasta_fn);
+					ret = -9;
+					goto err5;
+				}
+				ref = faidx_fetch_seq(fai, bat.bam_hdr->target_name[tid], 0, ref_len, &ref_len);
+				if (ref == NULL) {
+					ret = -10;
+					goto err5;
+				}
+			}
+			if (pos >= ref_len) {
+				fprintf(stderr, "%s has position %s:%d, but %s ends at %s:%d\n",
+						opt->bam_fn,
+						bat.bam_hdr->target_name[tid],
+						pos,
+						opt->fasta_fn,
+						bat.bam_hdr->target_name[tid],
+						ref_len-1
+						);
+				ret = -11;
+				goto err5;
+			}
+			majority_base = ref[pos];
+		} else if (majority > 0) {
 			int n_majorities = 0;
 			for (j=0; j<16; j++) {
 				if (nt[j] == majority)
@@ -406,24 +467,17 @@ mark_5mC(opt_t *opt)
 				int k;
 				for (j=0, k=0; j<16; j++) {
 					if (nt[j] == majority && k++ == maj_k) {
-						majority_base = j;
+						majority_base = "=ACMGRSVTWYHKDBN"[j];
 						break;
 					}
 				}
 			}
 		}
 
-		struct mpos_t m;
-		m.tid = tid;
-		m.pos = pos;
-		m.f_C = ntpair[nt2int['T']<<2 | nt2int['G']];
-		m.f_mC = ntpair[nt2int['C']<<2 | nt2int['G']];
-		m.r_C = ntpair[nt2int['G']<<2 | nt2int['T']];
-		m.r_mC = ntpair[nt2int['G']<<2 | nt2int['C']];
-		m.c = (majority_base == 2 && m.f_C+m.f_mC) ? 1: 0;
-		m.g = (majority_base == 4 && m.r_C+m.r_mC) ? 1: 0;
-		m.f_H = (majority_base == 1 || majority_base == 2 || majority_base == 8) ? 1: 0;
-		m.r_H = (majority_base == 1 || majority_base == 4 || majority_base == 8) ? 1: 0;
+		m.c = (majority_base == 'C' && m.f_C+m.f_mC) ? 1: 0;
+		m.g = (majority_base == 'G' && m.r_C+m.r_mC) ? 1: 0;
+		m.f_H = (majority_base == 'A' || majority_base == 'C' || majority_base == 'T') ? 1: 0;
+		m.r_H = (majority_base == 'A' || majority_base == 'G' || majority_base == 'T') ? 1: 0;
 
 		//printf("chrom\tpos-0\tpos-1\tcontext\t+C\t+mC\t-C\t-mC\n");
 		if (mpos[0].tid == tid && mpos[0].pos+2 == pos) {
@@ -496,9 +550,14 @@ mark_5mC(opt_t *opt)
 
 
 	ret = 0;
-err4:
-	bam_plp_destroy(plpiter);
+err5:
+	if (ref)
+		free(ref);
 
+	if (opt->fasta_fn)
+		fai_destroy(fai);
+	bam_plp_destroy(plpiter);
+err4:
 	if (bat.bed_head) {
 		bed_t *x, *xx;
 		for (x=bat.bed_head; x!=NULL; ) {
@@ -521,11 +580,15 @@ err0:
 void
 usage(char *argv0, opt_t *opt)
 {
-	fprintf(stderr, "mark_5mC v6\n");
+	fprintf(stderr, "mark_5mC v7\n\n");
+	fprintf(stderr, " Print the methylation status of cytosines in CpG/CHG/CHH contexts,\n"
+			" where context is determined by majority base call in the pileup\n\n");
+
 	fprintf(stderr, "usage: %s [...] in.bam\n", argv0);
 	fprintf(stderr, " -b REGIONS.BED    Count methylation levels for specified regions\n");
 	fprintf(stderr, " -M MAPQ           Minimum mapping quality for a read to be counted [%d]\n", opt->min_mapq);
 	fprintf(stderr, " -B BASEQ          Minimum base quality for a base to be counted [%d]\n", opt->min_baseq);
+	fprintf(stderr, " -f FASTA          Determine CpG/CHG/CHH context from reference fasta file []\n");
 	fprintf(stderr, " -5 N              Only count bases at least N bp from the 5' end of a read [%d]\n", opt->min_5);
 	fprintf(stderr, " -3 M              Only count bases at least M bp from the 3' end of a read [%d]\n", opt->min_3);
 	exit(1);
@@ -543,10 +606,13 @@ main(int argc, char **argv)
 	opt.min_5 = 0;
 	opt.min_3 = 0;
 
-	while ((c = getopt(argc, argv, "b:M:B:5:3:")) != -1) {
+	while ((c = getopt(argc, argv, "b:M:B:5:3:f:")) != -1) {
 		switch (c) {
 			case 'b':
 				opt.bed_fn = optarg;
+				break;
+			case 'f':
+				opt.fasta_fn = optarg;
 				break;
 			case 'M':
 				opt.min_mapq = strtoul(optarg, NULL, 0);
