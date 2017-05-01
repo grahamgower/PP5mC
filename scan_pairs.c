@@ -243,13 +243,22 @@ scan_pairs(opt_t *opt)
 				if (xf2ssqq(xf, &s1, &s2, &q1, &q2) < 0)
 					continue;
 
+				int hclip = 0;
 				if (bam_is_rev(p->b)) {
-					ci = cmap[(int)s2[p->b->core.l_qseq - p->qpos-1]];
-					cj = s1[p->b->core.l_qseq - p->qpos-1];
+					if (p->b->core.n_cigar > 1) {
+						if (bam_cigar_op(bam_get_cigar(p->b)[p->b->core.n_cigar-1]) == BAM_CHARD_CLIP)
+							hclip = bam_cigar_oplen(bam_get_cigar(p->b)[p->b->core.n_cigar-1]);
+					}
+					ci = cmap[(int)s2[p->b->core.l_qseq - p->qpos-1 +hclip]];
+					cj = s1[p->b->core.l_qseq - p->qpos-1 +hclip];
 					//fprintf(stderr, "[-]%s  %d:%d:%d  %c/%c\n", bam_get_qname(p->b), pos, p->qpos, i, ci, cj);
 				} else {
-					ci = s1[p->qpos];
-					cj = cmap[(int)s2[p->qpos]];
+					if (p->b->core.n_cigar > 1) {
+						if (bam_cigar_op(bam_get_cigar(p->b)[0]) == BAM_CHARD_CLIP)
+							hclip = bam_cigar_oplen(bam_get_cigar(p->b)[0]);
+					}
+					ci = s1[p->qpos +hclip];
+					cj = cmap[(int)s2[p->qpos +hclip]];
 					//fprintf(stderr, "[+]%s  %d:%d:%d  %c/%c\n", bam_get_qname(p->b), pos, p->qpos, i, ci, cj);
 				}
 
@@ -445,7 +454,7 @@ err0:
 void
 usage(char *argv0)
 {
-	fprintf(stderr, "scan_pairs v1\n");
+	fprintf(stderr, "scan_pairs v2\n");
 	fprintf(stderr, "usage: %s [-h HPLEN] in.bam\n", argv0);
 	exit(1);
 }
