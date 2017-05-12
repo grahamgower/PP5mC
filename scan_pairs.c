@@ -21,18 +21,23 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+#include <assert.h>
 
 #include <htslib/sam.h>
 
 #include "kseq.h"
 KSTREAM_INIT(int, read, 16384);
 
+#include "fold.h"
+
 typedef struct {
 	char *bam_fn;
 	char *bed_fn;
 	int min_mapq;
 	int min_baseq;
-	int hp_len;
+	char *hairpin;
+	char *rhairpin;
+	int hlen;
 	FILE *metrics_fp;
 } opt_t;
 
@@ -44,6 +49,12 @@ typedef struct {
 	hts_itr_t *bam_iter;
 } bam_aux_t;
 
+
+// defined in the SAM spec
+#define PHRED_SCALE 33
+
+#define min(a,b) ((a)<(b)?(a):(b))
+#define max(a,b) ((a)>(b)?(a):(b))
 
 static int nt2int[256] = {['A']=0, ['C']=1, ['G']=2, ['T']=3};
 static char cmap[] = {['A']='T', ['C']='G', ['G']='C', ['T']='A', ['N']='N', ['n']='N',
@@ -79,45 +90,49 @@ next_aln(void *data, bam1_t *b)
 	bam_aux_t *bat = data;
 	int ret;
 
+	uint8_t *xf_aux;
+	char *xf;
+	char *s1, *s2, *q1, *q2;
+	int len;
+
 	while (1) {
 		ret = sam_itr_next(bat->bam_fp, bat->bam_iter, b);
 		if (ret < 0) {
 			// iterator exhausted
 			break;
 		}
-	
 
 		if (b->core.flag & (BAM_FUNMAP | BAM_FQCFAIL | BAM_FDUP) ||
 				b->core.qual < bat->opt->min_mapq)
 			// skip these
 			continue;
 
+		if (b->core.n_cigar > 1)
+			// exclude reads which are clipped or contain indels
+			continue;
+
+		xf_aux = bam_aux_get(b, "XF");
+		if (xf_aux == NULL)
+			continue;
+		xf = bam_aux2Z(xf_aux);
+		if (xf == NULL)
+			continue;
+
+		len = xf2ssqq(xf, &s1, &s2, &q1, &q2);
+		if (len < 0)
+			continue;
+
+		if (correct_s1s2(s1, q1, len, s2, q2, len,
+				bat->opt->hairpin,
+				bat->opt->rhairpin,
+				bat->opt->hlen,
+				PHRED_SCALE, PHRED_SCALE) == -1)
+			continue;
+
 		break;
 	}
 
 	return ret;
-}
-
-int
-xf2ssqq(char *xf, char **s1, char **s2, char **q1, char **q2)
-{
-	char *p = xf;
-	int len;
-
-	while (*p != 0 && *p != '|')
-		p++;
-
-	if (*p == 0)
-		return -1;
-
-	len = p-xf;
-
-	*s1 = xf;
-	*s2 = xf+len+1;
-	*q1 = xf+2*(len+1);
-	*q2 = xf+3*(len+1);
-
-	return len;
 }
 
 #define WIN_SZ (128*1024)
@@ -225,7 +240,8 @@ scan_pairs(opt_t *opt)
 				uint8_t *xf_aux;
 				char *xf;
 				char *s1, *s2, *q1, *q2;
-				int ci, cj;
+				int ci, cj, qi, qj;
+				int sx;
 
 				if (p->is_del || p->is_refskip)
 					continue;
@@ -243,26 +259,23 @@ scan_pairs(opt_t *opt)
 				if (xf2ssqq(xf, &s1, &s2, &q1, &q2) < 0)
 					continue;
 
-				int hclip = 0;
 				if (bam_is_rev(p->b)) {
-					if (p->b->core.n_cigar > 1) {
-						if (bam_cigar_op(bam_get_cigar(p->b)[p->b->core.n_cigar-1]) == BAM_CHARD_CLIP)
-							hclip = bam_cigar_oplen(bam_get_cigar(p->b)[p->b->core.n_cigar-1]);
-					}
-					ci = cmap[(int)s2[p->b->core.l_qseq - p->qpos-1 +hclip]];
-					cj = s1[p->b->core.l_qseq - p->qpos-1 +hclip];
+					sx = p->b->core.l_qseq - p->qpos-1;
+					ci = cmap[(int)s2[sx]];
+					cj = s1[sx];
+					qi = q2[sx];
+					qj = q1[sx];
 					//fprintf(stderr, "[-]%s  %d:%d:%d  %c/%c\n", bam_get_qname(p->b), pos, p->qpos, i, ci, cj);
 				} else {
-					if (p->b->core.n_cigar > 1) {
-						if (bam_cigar_op(bam_get_cigar(p->b)[0]) == BAM_CHARD_CLIP)
-							hclip = bam_cigar_oplen(bam_get_cigar(p->b)[0]);
-					}
-					ci = s1[p->qpos +hclip];
-					cj = cmap[(int)s2[p->qpos +hclip]];
+					sx = p->qpos;
+					ci = s1[sx];
+					cj = cmap[(int)s2[sx]];
+					qi = q1[sx];
+					qj = q2[sx];
 					//fprintf(stderr, "[+]%s  %d:%d:%d  %c/%c\n", bam_get_qname(p->b), pos, p->qpos, i, ci, cj);
 				}
 
-				if (ci == 'N' || cj == 'N')
+				if (qi < PHRED_SCALE+opt->min_baseq || qj < PHRED_SCALE+opt->min_baseq)
 					continue;
 
 				win[wi*MAX_DP + dp] = nt2int[(int)ci]<<2 | nt2int[(int)cj];
@@ -293,15 +306,24 @@ scan_pairs(opt_t *opt)
 			char *s1, *s2, *q1, *q2;
 			int len;
 			int hairpin;
-			int ci, cj;
+			int ci, cj, qi, qj;
+			int sx;
 
 			//if (b->core.pos < win_pos || b->core.pos >= win_pos+WIN_SZ)
 			//	continue;
 
+			if (b->core.flag & (BAM_FUNMAP|BAM_FSECONDARY|BAM_FQCFAIL|BAM_FDUP|BAM_FSUPPLEMENTARY))
+				continue;
+
 			if (b->core.l_qseq < 2*CTX_SZ)
 				continue;
 
-			if (b->core.flag & (BAM_FUNMAP|BAM_FSECONDARY|BAM_FQCFAIL|BAM_FDUP|BAM_FSUPPLEMENTARY))
+			/*
+			 * Exclude reads which are clipped or contain indels.
+			 * We could perhaps do something more sensible but this would
+			 * further complicate the code for probably little gain.
+			 */
+			if (b->core.n_cigar > 1)
 				continue;
 
 			xf_aux = bam_aux_get(b, "XF");
@@ -314,27 +336,41 @@ scan_pairs(opt_t *opt)
 			if ((len = xf2ssqq(xf, &s1, &s2, &q1, &q2)) < 0)
 				continue;
 
-			if (b->core.l_qseq+opt->hp_len < len)
+			if (b->core.l_qseq+opt->hlen < len)
 				hairpin = 1;
 			else
 				hairpin = 0;
+
+			if (correct_s1s2(s1, q1, len,
+					s2, q2, len,
+					opt->hairpin,
+					opt->rhairpin,
+					opt->hlen,
+					PHRED_SCALE, PHRED_SCALE) == -1)
+				continue;
 
 			if (bam_is_rev(b)) {
 				// within the read
 				for (x=0; x<CTX_SZ; x++) {
 					// 5'
-					ci = cmap[(int)s2[b->core.l_qseq-x-1]];
-					cj = s1[b->core.l_qseq-x-1];
-					if (ci != 'N' && cj != 'N')
+					sx = b->core.l_qseq-x-1;
+					ci = cmap[(int)s2[sx]];
+					cj = s1[sx];
+					qi = q2[sx];
+					qj = q1[sx];
+					if (qi >= PHRED_SCALE+opt->min_baseq && qj >= PHRED_SCALE+opt->min_baseq)
 						ctx5p[CTX_SZ+x][(nt2int[(int)ci]<<2)|nt2int[(int)cj]]++;
 
 					if (!hairpin)
 						continue;
 
 					// 3'
-					ci = cmap[(int)s2[x]];
-					cj = s1[x];
-					if (ci != 'N' && cj != 'N')
+					sx = x;
+					ci = cmap[(int)s2[sx]];
+					cj = s1[sx];
+					qi = q2[sx];
+					qj = q1[sx];
+					if (qi >= PHRED_SCALE+opt->min_baseq && qj >= PHRED_SCALE+opt->min_baseq)
 						ctx3p[CTX_SZ-x-1][(nt2int[(int)ci]<<2)|nt2int[(int)cj]]++;
 				}
 
@@ -360,18 +396,24 @@ scan_pairs(opt_t *opt)
 				// within the read
 				for (x=0; x<CTX_SZ; x++) {
 					// 5'
-					ci = s1[x];
-					cj = cmap[(int)s2[x]];
-					if (ci != 'N' && cj != 'N')
+					sx = x;
+					ci = s1[sx];
+					cj = cmap[(int)s2[sx]];
+					qi = q1[sx];
+					qj = q2[sx];
+					if (qi >= PHRED_SCALE+opt->min_baseq && qj >= PHRED_SCALE+opt->min_baseq)
 						ctx5p[CTX_SZ+x][(nt2int[(int)ci]<<2)|nt2int[(int)cj]]++;
 
 					if (!hairpin)
 						continue;
 
 					// 3'
-					ci = s1[b->core.l_qseq-x-1];
-					cj = cmap[(int)s2[b->core.l_qseq-x-1]];
-					if (ci != 'N' && cj != 'N')
+					sx = b->core.l_qseq-x-1;
+					ci = s1[sx];
+					cj = cmap[(int)s2[sx]];
+					qi = q1[sx];
+					qj = q2[sx];
+					if (qi >= PHRED_SCALE+opt->min_baseq && qj >= PHRED_SCALE+opt->min_baseq)
 						ctx3p[CTX_SZ-x-1][(nt2int[(int)ci]<<2)|nt2int[(int)cj]]++;
 				}
 
@@ -468,14 +510,16 @@ main(int argc, char **argv)
 	memset(&opt, 0, sizeof(opt_t));
 	opt.min_mapq = 25;
 	opt.min_baseq = 10;
-	opt.hp_len = 29;
 	opt.metrics_fp = stdout;
+	opt.hairpin = "ACGCCGGCGGCAAGTGAAGCCGCCGGCGT";
+	opt.rhairpin = "ACGCCGGCGGCTTCACTTGCCGCCGGCGT";
+	opt.hlen = strlen(opt.hairpin);
 
 	while ((c = getopt(argc, argv, "h:")) != -1) {
 		switch (c) {
 			case 'h':
-				opt.hp_len = strtoul(optarg, NULL, 0);
-				if (opt.hp_len < 1 || opt.hp_len > 150) {
+				opt.hlen = strtoul(optarg, NULL, 0);
+				if (opt.hlen < 1 || opt.hlen > 150) {
 					fprintf(stderr, "Error: invalid hairpin length: `%s'\n", optarg);
 					usage(argv[0]);
 				}

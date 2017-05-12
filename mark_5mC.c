@@ -21,6 +21,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+#include <ctype.h>
 
 #include <htslib/sam.h>
 #include <htslib/faidx.h>
@@ -28,10 +29,15 @@
 #include "kseq.h"
 KSTREAM_INIT(int, read, 16384);
 
+#include "fold.h"
+
 typedef struct {
 	char *bam_fn;
 	char *bed_fn;
 	char *fasta_fn;
+	char *hairpin;
+	char *rhairpin;
+	size_t hlen;
 	int min_mapq;
 	int min_baseq;
 	int min_5;
@@ -52,8 +58,12 @@ typedef struct {
 	hts_idx_t *bam_idx;
 	hts_itr_t *bam_iter;
 	bed_t *bed_head;
+	char *ref;
+	faidx_t *fai;
 } bam_aux_t;
 
+// defined in the SAM spec
+#define PHRED_SCALE 33
 
 static int nt2int[256] = {['A']=0, ['C']=1, ['G']=2, ['T']=3};
 static char cmap[] = {['A']='T', ['C']='G', ['G']='C', ['T']='A', ['N']='N', ['n']='N',
@@ -177,6 +187,11 @@ next_aln(void *data, bam1_t *b)
 	bam_aux_t *bat = data;
 	int ret;
 
+	uint8_t *xf_aux;
+	char *xf;
+	char *s1, *s2, *q1, *q2;
+	int len;
+
 	while (1) {
 		if (bat->opt->bed_fn) {
 			if (bat->bed_head == NULL) {
@@ -211,32 +226,95 @@ next_aln(void *data, bam1_t *b)
 			// skip these
 			continue;
 
+		xf_aux = bam_aux_get(b, "XF");
+		if (xf_aux == NULL)
+			continue;
+		xf = bam_aux2Z(xf_aux);
+		if (xf == NULL)
+			continue;
+
+		len = xf2ssqq(xf, &s1, &s2, &q1, &q2);
+		if (len < 0)
+			continue;
+
+		if (correct_s1s2(s1, q1, len, s2, q2, len,
+				bat->opt->hairpin,
+				bat->opt->rhairpin,
+				bat->opt->hlen,
+				PHRED_SCALE, PHRED_SCALE) == -1)
+			continue;
+
 		break;
 	}
 
 	return ret;
 }
 
-int
-xf2ssqq(char *xf, char **s1, char **s2, char **q1, char **q2)
+/*
+ * Get base in the reference.
+ */
+char
+get_refbase(bam_aux_t *bat, int tid, int pos)
 {
-	char *p = xf;
-	int len;
+	static int ref_tid = -1;
+	static int ref_len = -1;
 
-	while (*p != 0 && *p != '|')
-		p++;
+	if (ref_tid != tid) {
+		if (bat->ref)
+			free(bat->ref);
+		bat->ref = NULL;
+		ref_len = faidx_seq_len(bat->fai, bat->bam_hdr->target_name[tid]);
+		if (ref_len == -1) {
+			fprintf(stderr, "%s has region `%s', which is not in %s\n",
+					bat->opt->bam_fn,
+					bat->bam_hdr->target_name[tid],
+					bat->opt->fasta_fn);
+			return -1;
+		}
+		bat->ref = faidx_fetch_seq(bat->fai, bat->bam_hdr->target_name[tid], 0, ref_len, &ref_len);
+		if (bat->ref == NULL)
+			return -1;
+	}
 
-	if (*p == 0)
-		return -1;
+	if (pos < 0 || pos >= ref_len)
+		return 'N';
 
-	len = p-xf;
+	return toupper(bat->ref[pos]);
+}
 
-	*s1 = xf;
-	*s2 = xf+len+1;
-	*q1 = xf+2*(len+1);
-	*q2 = xf+3*(len+1);
+int
+print_m(bam_aux_t *bat, int tid, int pos, char refbase, int depth, int C, int mC)
+{
+	char strand, ctx1, ctx2;
 
-	return len;
+	if (refbase == 'C') {
+		strand = '+';
+		ctx1 = get_refbase(bat, tid, pos+1);
+		ctx2 = get_refbase(bat, tid, pos+2);
+		if (ctx1 == -1 || ctx2 == -1)
+			return -1;
+	} else {
+		strand = '-';
+		ctx1 = get_refbase(bat, tid, pos-1);
+		ctx2 = get_refbase(bat, tid, pos-2);
+		if (ctx1 == -1 || ctx2 == -1)
+			return -1;
+		ctx1 = cmap[(int)ctx1];
+		ctx2 = cmap[(int)ctx2];
+	}
+
+	printf("%s\t%d\t%d\t%c\t%d\t%d\t%d\t%c%c%c\n",
+			bat->bam_hdr->target_name[tid],
+			pos,
+			pos+1,
+			strand,
+			depth,
+			C,
+			mC,
+			'C',
+			ctx1,
+			ctx2);
+	return 0;
 }
 
 int
@@ -245,27 +323,9 @@ mark_5mC(opt_t *opt)
 	bam_aux_t bat;
 	bam_plp_t plpiter;
 	const bam_pileup1_t *plp;
-	faidx_t *fai = NULL;
-	char *ref = NULL;
-	int ref_tid = -1;
-	int ref_len;
 	int tid, pos, n;
-	int i, j;
+	int i;
 	int ret;
-
-	struct mpos_t {
-		int tid;
-		int pos;
-		int c, g;
-		int f_C;
-		int f_mC;
-		int f_H;
-		int r_C;
-		int r_mC;
-		int r_H;
-	} mpos[2];
-	memset(&mpos, 0, sizeof(mpos));
-	mpos[0].tid = mpos[1].tid = -1;
 
 	memset(&bat, 0, sizeof(bam_aux_t));
 	bat.opt = opt;
@@ -299,18 +359,16 @@ mark_5mC(opt_t *opt)
 		}
 	}
 
-	if (opt->fasta_fn) {
-		fai = fai_load(opt->fasta_fn);
-		if (fai == NULL) {
-			ret = -5;
-			goto err4;
-		}
+	bat.fai = fai_load(opt->fasta_fn);
+	if (bat.fai == NULL) {
+		ret = -5;
+		goto err4;
 	}
 
 	bat.bam_iter = NULL;
 	plpiter = bam_plp_init(next_aln, &bat);
 
-	printf("chrom\tpos-0\tpos-1\tcontext\t+C\t+mC\t-C\t-mC\n");
+	printf("chrom\tpos-0\tpos-1\tstrand\tdepth\tC\tmC\tcontext\n");
 
 	while ((plp = bam_plp_auto(plpiter, &tid, &pos, &n)) != 0) {
 
@@ -318,9 +376,8 @@ mark_5mC(opt_t *opt)
 			continue;
 
 		int ntpair[16] = {0,};
-		int nt[16] = {0,};
-		int majority = 0;
-		char majority_base = 0;
+		int depth = 0;
+		char refbase = 0;
 
 		for (i=0; i<n; i++) {
 			const bam_pileup1_t *p = plp + i;
@@ -366,8 +423,8 @@ mark_5mC(opt_t *opt)
 				}
 				ci = cmap[(int)s2[p->b->core.l_qseq - p->qpos-1 +hclip]];
 				cj = s1[p->b->core.l_qseq - p->qpos-1 +hclip];
-				qi = q2[p->b->core.l_qseq - p->qpos-1 +hclip] - 33;
-				qj = q1[p->b->core.l_qseq - p->qpos-1 +hclip] - 33;
+				qi = q2[p->b->core.l_qseq - p->qpos-1 +hclip];
+				qj = q1[p->b->core.l_qseq - p->qpos-1 +hclip];
 			} else {
 				if (p->b->core.n_cigar > 1) {
 					if (bam_cigar_op(bam_get_cigar(p->b)[0]) == BAM_CHARD_CLIP)
@@ -375,8 +432,8 @@ mark_5mC(opt_t *opt)
 				}
 				ci = s1[p->qpos+hclip];
 				cj = cmap[(int)s2[p->qpos+hclip]];
-				qi = q1[p->qpos+hclip] - 33;
-				qj = q2[p->qpos+hclip] - 33;
+				qi = q1[p->qpos+hclip];
+				qj = q2[p->qpos+hclip];
 			}
 
 			/*
@@ -393,169 +450,47 @@ mark_5mC(opt_t *opt)
 						hclip>0?"HCLIP":"", hclip);
 			}*/
 
-			if (qi < opt->min_baseq || qj < opt->min_baseq)
+			if (qi < PHRED_SCALE+opt->min_baseq || qj < PHRED_SCALE+opt->min_baseq)
 				continue;
 
 			int pair = nt2int[(int)ci]<<2 | nt2int[(int)cj];
 			ntpair[pair]++;
-
-			if (!opt->fasta_fn) {
-				int base = bam_seqi(bam_get_seq(p->b),p->qpos);
-				nt[base]++;
-				if (nt[base] > majority) {
-					majority = nt[base];
-					majority_base = "=ACMGRSVTWYHKDBN"[base];
-				}
-			}
+			depth++;
 		}
 
+		if (!depth)
+			continue;
 
-
-		struct mpos_t m;
-		m.tid = tid;
-		m.pos = pos;
-		m.f_C = ntpair[nt2int['T']<<2 | nt2int['G']];
-		m.f_mC = ntpair[nt2int['C']<<2 | nt2int['G']];
-		m.r_C = ntpair[nt2int['G']<<2 | nt2int['T']];
-		m.r_mC = ntpair[nt2int['G']<<2 | nt2int['C']];
-
-		if (opt->fasta_fn) {
-			// use reference for context
-			if (ref_tid != tid) {
-				if (ref)
-					free(ref);
-				ref = NULL;
-				ref_len = faidx_seq_len(fai, bat.bam_hdr->target_name[tid]);
-				if (ref_len == -1) {
-					fprintf(stderr, "%s has region `%s', which is not in %s\n",
-							opt->bam_fn,
-							bat.bam_hdr->target_name[tid],
-							opt->fasta_fn);
-					ret = -9;
-					goto err5;
-				}
-				ref = faidx_fetch_seq(fai, bat.bam_hdr->target_name[tid], 0, ref_len, &ref_len);
-				if (ref == NULL) {
-					ret = -10;
-					goto err5;
-				}
-			}
-			if (pos >= ref_len) {
-				fprintf(stderr, "%s has position %s:%d, but %s ends at %s:%d\n",
-						opt->bam_fn,
-						bat.bam_hdr->target_name[tid],
-						pos,
-						opt->fasta_fn,
-						bat.bam_hdr->target_name[tid],
-						ref_len-1
-						);
-				ret = -11;
-				goto err5;
-			}
-			majority_base = ref[pos];
-		} else if (majority > 0) {
-			int n_majorities = 0;
-			for (j=0; j<16; j++) {
-				if (nt[j] == majority)
-					n_majorities++;
-			}
-
-			if (n_majorities > 1) {
-				// tied for majority base, pick one at random
-				static unsigned short xsubi[3] = {31,41,59}; // random state
-				int maj_k = nrand48(xsubi) % n_majorities;
-				int k;
-				for (j=0, k=0; j<16; j++) {
-					if (nt[j] == majority && k++ == maj_k) {
-						majority_base = "=ACMGRSVTWYHKDBN"[j];
-						break;
-					}
-				}
-			}
+		refbase = get_refbase(&bat, tid, pos);
+		if (refbase == -1) {
+			ret = -9;
+			goto err5;
 		}
 
-		m.c = (majority_base == 'C' && m.f_C+m.f_mC) ? 1: 0;
-		m.g = (majority_base == 'G' && m.r_C+m.r_mC) ? 1: 0;
-		m.f_H = (majority_base == 'A' || majority_base == 'C' || majority_base == 'T') ? 1: 0;
-		m.r_H = (majority_base == 'A' || majority_base == 'G' || majority_base == 'T') ? 1: 0;
-
-		//printf("chrom\tpos-0\tpos-1\tcontext\t+C\t+mC\t-C\t-mC\n");
-		if (mpos[0].tid == tid && mpos[0].pos+2 == pos) {
-			// 3 consecutive coordinates
-			if (mpos[1].c && m.g) {
-				// NCG
-				printf("%s\t%d\t%d\tCpG\t%d\t%d\t%d\t%d\n",
-					bat.bam_hdr->target_name[tid],
-					mpos[1].pos,
-					pos+1,
-					mpos[1].f_C,
-					mpos[1].f_mC,
-					m.r_C,
-					m.r_mC
-					);
-			} else if (mpos[0].c && (mpos[1].f_H && mpos[1].r_H) && m.g) {
-				// CHG
-				printf("%s\t%d\t%d\tCHG\t%d\t%d\t%d\t%d\n",
-					bat.bam_hdr->target_name[tid],
-					mpos[0].pos,
-					pos+1,
-					mpos[0].f_C,
-					mpos[0].f_mC,
-					m.r_C,
-					m.r_mC
-					);
-			} else if (mpos[0].c && mpos[1].f_H && m.f_H) {
-				// CHH on forward strand
-				printf("%s\t%d\t%d\tCHH\t%d\t%d\t%d\t%d\n",
-					bat.bam_hdr->target_name[tid],
-					mpos[0].pos,
-					mpos[0].pos+1,
-					mpos[0].f_C,
-					mpos[0].f_mC,
-					0,
-					0
-					);
-			} else if (mpos[0].r_H && mpos[1].r_H && m.g) {
-				// CHH on reverse strand
-				printf("%s\t%d\t%d\tCHH\t%d\t%d\t%d\t%d\n",
-					bat.bam_hdr->target_name[tid],
-					pos,
-					pos+1,
-					0,
-					0,
-					m.r_C,
-					m.r_mC
-					);
-			}
-
-		} else if (mpos[1].tid == tid && mpos[1].pos+1 == pos) {
-			// 2 consecutive coordinates
-			if (mpos[1].c && m.g) {
-				// CG
-				printf("%s\t%d\t%d\tCpG\t%d\t%d\t%d\t%d\n",
-					bat.bam_hdr->target_name[tid],
-					mpos[1].pos,
-					pos+1,
-					mpos[1].f_C,
-					mpos[1].f_mC,
-					m.r_C,
-					m.r_mC
-					);
-			}
+		if (refbase == 'C') {
+			int f_C = ntpair[nt2int['T']<<2 | nt2int['G']];
+			int f_mC = ntpair[nt2int['C']<<2 | nt2int['G']];
+			ret = print_m(&bat, tid, pos, refbase, depth, f_C, f_mC);
+		} else if (refbase == 'G') {
+			int r_C = ntpair[nt2int['G']<<2 | nt2int['T']];
+			int r_mC = ntpair[nt2int['G']<<2 | nt2int['C']];
+			ret = print_m(&bat, tid, pos, refbase, depth, r_C, r_mC);
 		}
 
-		memcpy(&mpos[0], &mpos[1], sizeof(struct mpos_t));
-		memcpy(&mpos[1], &m, sizeof(struct mpos_t));
+		if (ret == -1) {
+			ret = -9;
+			goto err5;
+		}
 	}
 
 
 	ret = 0;
 err5:
-	if (ref)
-		free(ref);
+	if (bat.ref)
+		free(bat.ref);
 
 	if (opt->fasta_fn)
-		fai_destroy(fai);
+		fai_destroy(bat.fai);
 	bam_plp_destroy(plpiter);
 err4:
 	if (bat.bed_head) {
@@ -580,15 +515,14 @@ err0:
 void
 usage(char *argv0, opt_t *opt)
 {
-	fprintf(stderr, "mark_5mC v7\n\n");
+	fprintf(stderr, "mark_5mC v8\n\n");
 	fprintf(stderr, " Print the methylation status of cytosines in CpG/CHG/CHH contexts,\n"
-			" where context is determined by majority base call in the pileup\n\n");
+			" where context is determined from the reference sequence.\n\n");
 
-	fprintf(stderr, "usage: %s [...] in.bam\n", argv0);
+	fprintf(stderr, "usage: %s [...] in.bam ref.fasta\n", argv0);
 	fprintf(stderr, " -b REGIONS.BED    Count methylation levels for specified regions\n");
 	fprintf(stderr, " -M MAPQ           Minimum mapping quality for a read to be counted [%d]\n", opt->min_mapq);
 	fprintf(stderr, " -B BASEQ          Minimum base quality for a base to be counted [%d]\n", opt->min_baseq);
-	fprintf(stderr, " -f FASTA          Determine CpG/CHG/CHH context from reference fasta file []\n");
 	fprintf(stderr, " -5 N              Only count bases at least N bp from the 5' end of a read [%d]\n", opt->min_5);
 	fprintf(stderr, " -3 M              Only count bases at least M bp from the 3' end of a read [%d]\n", opt->min_3);
 	exit(1);
@@ -605,14 +539,14 @@ main(int argc, char **argv)
 	opt.min_baseq = 10;
 	opt.min_5 = 0;
 	opt.min_3 = 0;
+	opt.hairpin = "ACGCCGGCGGCAAGTGAAGCCGCCGGCGT";
+	opt.rhairpin = "ACGCCGGCGGCTTCACTTGCCGCCGGCGT";
+	opt.hlen = strlen(opt.hairpin);
 
-	while ((c = getopt(argc, argv, "b:M:B:5:3:f:")) != -1) {
+	while ((c = getopt(argc, argv, "b:M:B:5:3:")) != -1) {
 		switch (c) {
 			case 'b':
 				opt.bed_fn = optarg;
-				break;
-			case 'f':
-				opt.fasta_fn = optarg;
 				break;
 			case 'M':
 				opt.min_mapq = strtoul(optarg, NULL, 0);
@@ -647,11 +581,12 @@ main(int argc, char **argv)
 		}
 	}
 
-	if (argc-optind != 1) {
+	if (argc-optind != 2) {
 		usage(argv[0], &opt);
 	}
 
 	opt.bam_fn = argv[optind];
+	opt.fasta_fn = argv[optind+1];
 
 	if (mark_5mC(&opt) < 0) {
 		return 1;
