@@ -111,7 +111,7 @@ if __name__ == "__main__":
             if args.methylkit and mk_files[ctx] is not None:
                 print_methylkit(mk_files[ctx], chrom, start, end, strand, C, mC)
             if args.pileOmeth and pm_files[ctx] is not None:
-                print_pileOmeth(pm_files[ctx], )
+                print_pileOmeth(pm_files[ctx], chrom, start, end, C, mC)
 
     finally:
         for f in mk_files:
