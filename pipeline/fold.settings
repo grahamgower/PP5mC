@@ -1,0 +1,60 @@
+# Variables and auxiliary functions.
+
+hairpin=ACGCCGGCGGCAAGTGAAGCCGCCGGCGT
+hlen=`echo -n $hairpin | wc -c`
+
+# sequences observed if we read too far off the end of a molecule
+adapter1=AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC
+adapter2=AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTA
+
+# Data directory containing fastq files, which must have .fastq.gz extension.
+data=/localscratch/grg/fold-bovids/data
+
+# List of SAMPLE_LIB prefixes, for which there is at least one
+# pair of R?.fasta.gz files in the $data directory.
+# E.g. 'A666_HADES-1' for sample 'A666' with library 'HADES-1'
+sample_lib_pairs="
+A3020-MCS20-3-AncRAD8k_170209
+A3020-MCS34-1-AncRAD8k_170209
+A16121-MCS20-2-AncPET15k_170209
+A16121-MCS34-2-AncPET15k_170209
+A16171-MCS20-1-AncPET41k_170209
+A16171-MCS34-3-AncPET41k_170209
+A17345-MCS34-4-AncPET9k_170209
+A16121-MCS34-2-AncPET15k_170306
+A16171-MCS34-3-AncPET41k_170306
+A17345-MCS34-4-AncPET9k_170306
+A16121-MCS34-2-AncPET15k_170312
+A16171-MCS34-3-AncPET41k_170312
+A17345-MCS34-4-AncPET9k_170312
+"
+
+# Extract unique sample names from $sample_lib_pairs.
+samples=`for s in $sample_lib_pairs; do echo $s; done | cut -d_ -f1 | sort -u`
+
+# List of references to use. Must have ".fasta" extension.
+# The basename without ".fasta" will be used in filenames.
+# E.g. 'foo_bar' is used for reference '/tmp/refs/foo_bar.fasta',
+# and sample/lib A666_HADES-1 will have final bam 'A666.foo_bar.bam'.
+refs="
+/localscratch/Refs/Lambda/Lambda_BWA6_2_2016_11/Lambda.fasta
+/localscratch/Refs/Bos_taurus/Bos_taurus_BWA6_2_2015_08/Cow_UMD3_1.fasta
+/localscratch/Refs/Bison_bison/REFbisonWMG.fasta
+"
+
+# Number of threads to use for various tools.
+nthreads=4
+realigner_threads_per_sample=1 #$nthreads
+bwa_threads_per_sample=$nthreads
+sort_threads_per_sample=$nthreads # don't set this too high,
+				  # as it runs concurrently with bwa
+
+
+# Kills all subprocesses when parent process is killed (e.g. by CTRL-C).
+#trap 'kill 0' EXIT
+
+# Print error message and exit.
+die() {
+	echo Error: $@
+	exit 1
+}
