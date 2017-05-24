@@ -4,7 +4,13 @@ from __future__ import print_function
 import sys
 
 def parse_methlist(filename):
-    with open(filename) as f:
+    if filename.endswith(".gz"):
+        import gzip
+        xopen = gzip.open
+    else:
+        xopen = open
+
+    with xopen(filename) as f:
         next(f) # skip header
         # rintf("chrom\tpos-0\tpos-1\tstrand\tdepth\tC\tmC\tcontext\n");
         for line in f:
