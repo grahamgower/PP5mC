@@ -516,11 +516,12 @@ err0:
 void
 usage(char *argv0, opt_t *opt)
 {
-	fprintf(stderr, "mark_5mC v8\n\n");
+	fprintf(stderr, "mark_5mC v9\n\n");
 	fprintf(stderr, " Print the methylation status of cytosines in CpG/CHG/CHH contexts,\n"
 			" where context is determined from the reference sequence.\n\n");
 
 	fprintf(stderr, "usage: %s [...] in.bam ref.fasta\n", argv0);
+	fprintf(stderr, " -p SEQ            The hairpin SEQuence\n");
 	fprintf(stderr, " -b REGIONS.BED    Count methylation levels for specified regions\n");
 	fprintf(stderr, " -M MAPQ           Minimum mapping quality for a read to be counted [%d]\n", opt->min_mapq);
 	fprintf(stderr, " -B BASEQ          Minimum base quality for a base to be counted [%d]\n", opt->min_baseq);
@@ -534,18 +535,20 @@ main(int argc, char **argv)
 {
 	opt_t opt;
 	int c;
+	int i;
+	int ret;
 
 	memset(&opt, 0, sizeof(opt_t));
 	opt.min_mapq = 25;
 	opt.min_baseq = 10;
 	opt.min_5 = 0;
 	opt.min_3 = 0;
-	opt.hairpin = "ACGCCGGCGGCAAGTGAAGCCGCCGGCGT";
-	opt.rhairpin = "ACGCCGGCGGCTTCACTTGCCGCCGGCGT";
-	opt.hlen = strlen(opt.hairpin);
 
-	while ((c = getopt(argc, argv, "b:M:B:5:3:")) != -1) {
+	while ((c = getopt(argc, argv, "p:b:M:B:5:3:")) != -1) {
 		switch (c) {
+			case 'p':
+				opt.hairpin = optarg;
+				break;
 			case 'b':
 				opt.bed_fn = optarg;
 				break;
@@ -582,6 +585,23 @@ main(int argc, char **argv)
 		}
 	}
 
+	if (opt.hairpin == NULL) {
+		fprintf(stderr, "Error: must specify a hairpin sequence.\n");
+		usage(argv[0], &opt);
+	}
+
+	opt.hlen = strlen(opt.hairpin);
+	if (opt.hlen < 5 || opt.hlen > 1000) {
+		fprintf(stderr, "Error: hairpin too %s (len=%zd).\n",
+				opt.hlen<5?"short":"long", opt.hlen);
+		usage(argv[0], &opt);
+	}
+
+	for (i=0; i<opt.hlen; i++)
+		opt.hairpin[i] = toupper(opt.hairpin[i]);
+	opt.rhairpin = strdup(opt.hairpin);
+	revcomp(opt.rhairpin, opt.hlen);
+
 	if (argc-optind != 2) {
 		usage(argv[0], &opt);
 	}
@@ -589,9 +609,9 @@ main(int argc, char **argv)
 	opt.bam_fn = argv[optind];
 	opt.fasta_fn = argv[optind+1];
 
-	if (mark_5mC(&opt) < 0) {
-		return 1;
-	}
+	ret = (mark_5mC(&opt) != 0);
 
-	return 0;
+	free(opt.rhairpin);
+
+	return ret;
 }
