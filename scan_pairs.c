@@ -37,7 +37,7 @@ typedef struct {
 	int min_baseq;
 	char *hairpin;
 	char *rhairpin;
-	int hlen;
+	size_t hlen;
 	FILE *metrics_fp;
 } opt_t;
 
@@ -496,8 +496,9 @@ err0:
 void
 usage(char *argv0)
 {
-	fprintf(stderr, "scan_pairs v2\n");
-	fprintf(stderr, "usage: %s [-h HPLEN] in.bam\n", argv0);
+	fprintf(stderr, "scan_pairs v3\n");
+	fprintf(stderr, "usage: %s [-p SEQ] in.bam\n", argv0);
+	fprintf(stderr, " -p SEQ            The hairpin SEQuence\n");
 	exit(1);
 }
 
@@ -506,28 +507,40 @@ main(int argc, char **argv)
 {
 	opt_t opt;
 	int c;
+	int i;
+	int ret;
 
 	memset(&opt, 0, sizeof(opt_t));
 	opt.min_mapq = 25;
 	opt.min_baseq = 10;
 	opt.metrics_fp = stdout;
-	opt.hairpin = "ACGCCGGCGGCAAGTGAAGCCGCCGGCGT";
-	opt.rhairpin = "ACGCCGGCGGCTTCACTTGCCGCCGGCGT";
-	opt.hlen = strlen(opt.hairpin);
 
-	while ((c = getopt(argc, argv, "h:")) != -1) {
+	while ((c = getopt(argc, argv, "p:")) != -1) {
 		switch (c) {
-			case 'h':
-				opt.hlen = strtoul(optarg, NULL, 0);
-				if (opt.hlen < 1 || opt.hlen > 150) {
-					fprintf(stderr, "Error: invalid hairpin length: `%s'\n", optarg);
-					usage(argv[0]);
-				}
+			case 'p':
+				opt.hairpin = optarg;
 				break;
 			default:
 				usage(argv[0]);
 		}
 	}
+
+	if (opt.hairpin == NULL) {
+		fprintf(stderr, "Error: must specify a hairpin sequence.\n");
+		usage(argv[0]);
+	}
+
+	opt.hlen = strlen(opt.hairpin);
+	if (opt.hlen < 5 || opt.hlen > 1000) {
+		fprintf(stderr, "Error: hairpin too %s (len=%zd).\n",
+				opt.hlen<5?"short":"long", opt.hlen);
+		usage(argv[0]);
+	}
+
+	for (i=0; i<opt.hlen; i++)
+		opt.hairpin[i] = toupper(opt.hairpin[i]);
+	opt.rhairpin = strdup(opt.hairpin);
+	revcomp(opt.rhairpin, opt.hlen);
 
 	if (argc-optind != 1) {
 		usage(argv[0]);
@@ -537,9 +550,9 @@ main(int argc, char **argv)
 
 	srand(31415);
 
-	if (scan_pairs(&opt) < 0) {
-		return 1;
-	}
+	ret = (scan_pairs(&opt) != 0);
 
-	return 0;
+	free(opt.rhairpin);
+
+	return ret;
 }
