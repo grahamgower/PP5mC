@@ -41,7 +41,7 @@ def parse_args():
         args.methylkit = args.pileOmeth = True
         args.cpg = args.chg = args.chh = True
 
-    if not args.methylkist and not args.pileOmeth:
+    if not args.methylkit and not args.pileOmeth:
         print("Must set one or more of --methylkit or --pileOmeth",
                 file=sys.stderr)
         exit(1)
