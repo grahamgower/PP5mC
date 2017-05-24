@@ -3,14 +3,50 @@
 from __future__ import print_function
 import sys
 
-def parse_methlist(filename):
-    if filename.endswith(".gz"):
-        import gzip
-        xopen = gzip.open
-    else:
-        xopen = open
+class gzopen:
+    """
+    Pipe file through a gzip subprocess.
 
-    with xopen(filename) as f:
+    This is substantially faster than just using the gzip library,
+    particularly when dealing with multiple files at a time.
+    """
+    def __init__(self, fn, mode="r"):
+        from subprocess import Popen, PIPE
+        import os
+
+        try:
+            if "r" in mode:
+                self.pipe = Popen(["gzip", "-dc", fn], bufsize=-1, stdout=PIPE)
+                self.f = self.pipe.stdout
+            elif "w" in mode:
+                self.pipe = Popen(["gzip", "-c"], bufsize=-1, stdin=PIPE, stdout=open(fn, mode))
+                self.f = self.pipe.stdin
+        except OSError as e:
+            if e.errno == os.errno.ENOENT:
+                # no gzip
+                # ...
+                raise
+            else:
+                raise
+
+        self.read = self.f.read
+        self.write = self.f.write
+
+    def __enter__(self):
+        return self.f
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def close(self):
+        if self.pipe.stdin is not None:
+            self.pipe.stdin.close()
+        if self.pipe.stdout is not None:
+            self.pipe.stdout.close()
+
+
+def parse_methlist(filename):
+    with gzopen(filename) as f:
         next(f) # skip header
         # rintf("chrom\tpos-0\tpos-1\tstrand\tdepth\tC\tmC\tcontext\n");
         for line in f:
@@ -68,26 +104,25 @@ if __name__ == "__main__":
     pm_files = [None, None, None]
 
     if args.gzip:
-        import gzip
-        xopen = lambda fn,mode: gzip.open(fn+".gz", mode)
+        suffix = ".gz"
     else:
-        xopen = open
+        suffix = ""
 
     if args.methylkit:
         if args.cpg:
-            mk_files[0] = xopen("{}.methylkit.CpG.txt".format(args.oprefix), "w")
+            mk_files[0] = gzopen("{}.methylkit.CpG.txt{}".format(args.oprefix, suffix), "w")
         if args.chg:
-            mk_files[1] = xopen("{}.methylkit.CHG.txt".format(args.oprefix), "w")
+            mk_files[1] = gzopen("{}.methylkit.CHG.txt{}".format(args.oprefix, suffix), "w")
         if args.chh:
-            mk_files[2] = xopen("{}.methylkit.CHH.txt".format(args.oprefix), "w")
+            mk_files[2] = gzopen("{}.methylkit.CHH.txt{}".format(args.oprefix, suffix), "w")
 
     if args.pileOmeth:
         if args.cpg:
-            pm_files[0] = xopen("{}.pileOmeth.CpG.txt".format(args.oprefix), "w")
+            pm_files[0] = gzopen("{}.pileOmeth.CpG.txt{}".format(args.oprefix, suffix), "w")
         if args.chg:
-            pm_files[1] = xopen("{}.pileOmeth.CHG.txt".format(args.oprefix), "w")
+            pm_files[1] = gzopen("{}.pileOmeth.CHG.txt{}".format(args.oprefix, suffix), "w")
         if args.chh:
-            pm_files[2] = xopen("{}.pileOmeth.CHH.txt".format(args.oprefix), "w")
+            pm_files[2] = gzopen("{}.pileOmeth.CHH.txt{}".format(args.oprefix, suffix), "w")
 
 
     try:
