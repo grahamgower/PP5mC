@@ -17,9 +17,9 @@ def parse_methlist(filename):
             line = line.rstrip()
             fields = line.split("\t")
             chrom = fields[0]
-            start, end = map(int, fields[1:2])
+            start, end = map(int, fields[1:3])
             strand = fields[3]
-            depth, C, mC = map(int, fields[4:6])
+            depth, C, mC = map(int, fields[4:7])
             context = fields[7]
             yield chrom, start, end, strand, depth, C, mC, context
 
