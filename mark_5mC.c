@@ -274,6 +274,7 @@ get_refbase(bam_aux_t *bat, int tid, int pos)
 		bat->ref = faidx_fetch_seq(bat->fai, bat->bam_hdr->target_name[tid], 0, ref_len, &ref_len);
 		if (bat->ref == NULL)
 			return -1;
+		ref_tid = tid;
 	}
 
 	if (pos < 0 || pos >= ref_len)
