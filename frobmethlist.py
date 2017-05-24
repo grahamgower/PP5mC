@@ -24,7 +24,8 @@ def parse_methlist(filename):
             yield chrom, start, end, strand, depth, C, mC, context
 
 def parse_args():
-    import argsparse
+    import argparse
+    parser = argparse.ArgumentParser(description="Convert mark_5mC output to methylkit/pileOmeth formats")
     parser.add_argument("-m", "--methylkit", action="store_true", default=False)
     parser.add_argument("-p", "--pileOmeth", action="store_true", default=False)
     parser.add_argument("--cpg", action="store_true", default=False)
