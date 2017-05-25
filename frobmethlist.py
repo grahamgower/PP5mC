@@ -1,56 +1,8 @@
 #!/usr/bin/env python
 
 from __future__ import print_function
+from gzopen import gzopen
 import sys
-
-class gzopen:
-    """
-    Pipe file through a gzip subprocess.
-
-    This is substantially faster than just using the gzip library,
-    particularly when dealing with multiple files at a time.
-    """
-    def __init__(self, fn, mode="r"):
-        if not fn.endswith(".gz"):
-            # uncompressed file
-            self.f = open(fn, mode)
-            self.close = self.f.close
-        else:
-            # gz file requested
-            from subprocess import Popen, PIPE
-
-            try:
-                if "r" in mode:
-                    self.pipe = Popen(["gzip", "-dc", fn], bufsize=-1, stdout=PIPE)
-                    self.f = self.pipe.stdout
-                elif "w" in mode:
-                    self.pipe = Popen(["gzip", "-c"], bufsize=-1, stdin=PIPE, stdout=open(fn, mode))
-                    self.f = self.pipe.stdin
-            except OSError as e:
-                import os
-                if e.errno == os.errno.ENOENT:
-                    # no gzip command; do gzip in current process, which is slower
-                    import gzip
-                    self.f = gzip.open(fn, mode)
-                    self.close = self.f.close
-                else:
-                    raise
-
-        self.read = self.f.read
-        self.write = self.f.write
-
-    def __enter__(self):
-        return self.f
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
-
-    def close(self):
-        if self.pipe.stdin is not None:
-            self.pipe.stdin.close()
-        if self.pipe.stdout is not None:
-            self.pipe.stdout.close()
-
 
 def parse_methlist(filename):
     with gzopen(filename) as f:
@@ -123,13 +75,20 @@ if __name__ == "__main__":
         if args.chh:
             mk_files[2] = gzopen("{}.methylkit.CHH.txt{}".format(args.oprefix, suffix), "w")
 
+        for f in mk_files:
+            if f is not None:
+                print("chrBase\tchr\tbase\tstrand\tcoverage\tfreqC\tfreqT", file=f)
+
     if args.pileOmeth:
         if args.cpg:
             pm_files[0] = gzopen("{}.pileOmeth.CpG.txt{}".format(args.oprefix, suffix), "w")
+            print("track type=\"bedGraph\" description=\"CpG methylation levels\"", file=pm_files[0])
         if args.chg:
             pm_files[1] = gzopen("{}.pileOmeth.CHG.txt{}".format(args.oprefix, suffix), "w")
+            print("track type=\"bedGraph\" description=\"CHG methylation levels\"", file=pm_files[1])
         if args.chh:
             pm_files[2] = gzopen("{}.pileOmeth.CHH.txt{}".format(args.oprefix, suffix), "w")
+            print("track type=\"bedGraph\" description=\"CHH methylation levels\"", file=pm_files[2])
 
 
     try:
