@@ -606,8 +606,9 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 			(uintmax_t)metrics->adapter_no_hp);
 	fprintf(fp, "Number of read pairs with dislocated adapter (no hairpin): %jd\n",
 			(uintmax_t)metrics->adapter_no_hp_dislocated);
-	fprintf(fp, "Number of confidently identified Y-Y adapter read pairs: %jd\n",
+	/*fprintf(fp, "Number of confidently identified Y-Y adapter read pairs: %jd\n",
 			(uintmax_t)metrics->confident_yy);
+	*/
 
 	if (fp != stderr)
 		fclose(fp);
