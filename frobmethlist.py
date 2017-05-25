@@ -11,23 +11,30 @@ class gzopen:
     particularly when dealing with multiple files at a time.
     """
     def __init__(self, fn, mode="r"):
-        from subprocess import Popen, PIPE
-        import os
+        if not fn.endswith(".gz"):
+            # uncompressed file
+            self.f = open(fn, mode)
+            self.close = self.f.close
+        else:
+            # gz file requested
+            from subprocess import Popen, PIPE
 
-        try:
-            if "r" in mode:
-                self.pipe = Popen(["gzip", "-dc", fn], bufsize=-1, stdout=PIPE)
-                self.f = self.pipe.stdout
-            elif "w" in mode:
-                self.pipe = Popen(["gzip", "-c"], bufsize=-1, stdin=PIPE, stdout=open(fn, mode))
-                self.f = self.pipe.stdin
-        except OSError as e:
-            if e.errno == os.errno.ENOENT:
-                # no gzip
-                # ...
-                raise
-            else:
-                raise
+            try:
+                if "r" in mode:
+                    self.pipe = Popen(["gzip", "-dc", fn], bufsize=-1, stdout=PIPE)
+                    self.f = self.pipe.stdout
+                elif "w" in mode:
+                    self.pipe = Popen(["gzip", "-c"], bufsize=-1, stdin=PIPE, stdout=open(fn, mode))
+                    self.f = self.pipe.stdin
+            except OSError as e:
+                import os
+                if e.errno == os.errno.ENOENT:
+                    # no gzip command; do gzip in current process, which is slower
+                    import gzip
+                    self.f = gzip.open(fn, mode)
+                    self.close = self.f.close
+                else:
+                    raise
 
         self.read = self.f.read
         self.write = self.f.write
