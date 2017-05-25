@@ -25,7 +25,7 @@ fold() {
 		-p $hairpin \
 		-a $adapter1 \
 		-A $adapter2 \
-		-m /dev/null \
+		-m ${pfx}.metrics \
 		-1 $f1 \
 		-2 $f2 \
 		| pigz -p 2 -c - > ${fq_out} \
