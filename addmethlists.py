@@ -3,13 +3,22 @@
 from __future__ import print_function
 from gzopen import gzopen
 import sys
+import itertools
 
-def parse_tsv(fn, istart, iend):
+def parse_col0(fn):
     with gzopen(fn) as f:
         for line in f:
-            line = line.rstrip()
-            fields = line.split("\t")
-            yield fields[istart:iend], fields
+            yield line.split(None, 1)[0]
+
+def parse_tsv(fn, ichrom, ipos, chrmap, skip=1):
+    with gzopen(fn) as f:
+        while skip:
+            skip -= 1
+            next(f)
+        for line in f:
+            fields = line.split()
+            key = (chrmap[fields[ichrom]], int(fields[ipos]))
+            yield key, fields
 
 def parse_args():
     import argparse
@@ -17,6 +26,7 @@ def parse_args():
     parser.add_argument("-m", "--methylkit", action="store_true", default=False)
     parser.add_argument("-p", "--pileOmeth", action="store_true", default=False)
     parser.add_argument("-z", "--gzip", action="store_true", default=False, help="output is gzipped")
+    parser.add_argument("-l", "--chr-list", required=True, help="chromosome list for sort order (e.g. faidx file)")
     parser.add_argument("in1")
     parser.add_argument("in2")
     args = parser.parse_args()
@@ -37,29 +47,33 @@ if __name__ == "__main__":
     args = parse_args()
 
     if args.methylkit:
-        istart = 1
-        iend = 3
+        ichrom = 1
+        ipos = 2
     elif args.pileOmeth:
-        istart = 0
-        iend = 2
+        ichrom = 0
+        ipos = 1
     else:
         raise Exception("Are we doing methylkit or pileOmeth?")
 
-    f1 = parse_tsv(args.in1, istart, iend)
-    f2 = parse_tsv(args.in2, istart, iend)
+    chrmap = {s:i for i,s in enumerate(parse_col0(args.chr_list))}
+    f1 = parse_tsv(args.in1, ichrom, ipos, chrmap)
+    f2 = parse_tsv(args.in2, ichrom, ipos, chrmap)
 
-    k1, l1 = next(f1)
-    k2, l2 = next(f2)
-    oline = None
+    l1 = l2 = oline = None
+
 
     with gzopen("/dev/stdout", "w", args.gzip) as fout:
         try:
+            k1, l1 = next(f1)
+            k2, l2 = next(f2)
             while True:
                 if k1<k2:
                     oline = l1
+                    l1 = None
                     k1, l1 = next(f1)
-                if k2<k1:
+                elif k2<k1:
                     oline = l2
+                    l2 = None
                     k2, l2 = next(f2)
                 else:
                     if args.methylkit:
@@ -72,19 +86,22 @@ if __name__ == "__main__":
                         mC = int(l1[4]) + int(l2[4])
                         C = int(l1[5]) + int(l2[5])
                         oline.extend([100*mC/(C+mC), mC, C])
+
+                    l1 = l2 = None
                     k1, l1 = next(f1)
                     k2, l2 = next(f2)
 
                 print(*oline, file=fout, sep="\t")
 
         except StopIteration:
-            if oline == l1:
-                oline = l2
-                remainder = f2
-            else:
-                oline = l1
-                remainder = f1
+            pass
 
+        if oline is not None:
             print(*oline, file=fout, sep="\t")
-            for _, oline in remainder:
-                print(*oline, file=fout, sep="\t")
+        if l1 is not None:
+            print(*l1, file=fout, sep="\t")
+        if l2 is not None:
+            print(*l2, file=fout, sep="\t")
+
+        for _, lx in itertools.chain(f1, f2):
+            print(*lx, file=fout, sep="\t")
