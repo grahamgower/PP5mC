@@ -105,10 +105,10 @@ fold(const opt_t *opt, metrics_t *metrics,
 
 	h1 = h2 = min(h1, h2);
 
-	if (h1+opt->hlen <= len1 && h2+opt->hlen <= len2)
+	if (h1+opt->hlen <= len1)// && h2+opt->hlen <= len2)
 		metrics->hairpin_complete++;
 
-	if (h1+opt->hlen < len1 && h2+opt->hlen < len2) {
+	if (h1+opt->hlen < len1) {// && h2+opt->hlen < len2) {
 		// short molecule, there are valid bases after the hairpin
 		const char *s3 = s1 + h1 + opt->hlen;
 		const char *q3 = q1 + h1 + opt->hlen;
