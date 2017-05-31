@@ -147,7 +147,7 @@ find_hp_adapter(const char *s1, size_t len1,
 		}
 		if (adapter1 && !mmcmp(s1+i, adapter1, min(len1-i, a1len))) {
 			*a1 = i;
-			if (adapter2 && !mmcmp(s2+i, adapter2, min(len1-i, a2len)))
+			if (adapter2 && !mmcmp(s2+i, adapter2, min(len2-i, a2len)))
 				*a2 = i;
 			break;
 		}
@@ -159,7 +159,7 @@ find_hp_adapter(const char *s1, size_t len1,
 				*h2 = i;
 				break;
 			}
-			if (adapter2 && !mmcmp(s2+i, adapter2, min(len1-i, a2len))) {
+			if (adapter2 && !mmcmp(s2+i, adapter2, min(len2-i, a2len))) {
 				*a2 = i;
 				break;
 			}
