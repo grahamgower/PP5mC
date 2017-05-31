@@ -120,23 +120,17 @@ mmcmp(const char *s1, const char *s2, size_t len)
 /*
  * Search s1 and s2 for hairpin and adapter sequences.
  */
-int
+void
 find_hp_adapter(const char *s1, size_t len1,
 		const char *s2, size_t len2,
 		const char *hairpin, const char *rhairpin,
 		size_t hlen,
-		const char *adapter1, const char *adapter2,
-		size_t a1len, size_t a2len,
-		size_t adapter_matchlen,
-		int *h1, int *h2,
-		int *a1, int *a2)
+		int *h1, int *h2)
 {
 	int i;
 
 	*h1 = 0;
 	*h2 = 0;
-	*a1 = 0;
-	*a2 = 0;
 
 	for (i=0; i<len1; i++) {
 		if (!mmcmp(s1+i, hairpin, min(len1-i, hlen))) {
@@ -145,40 +139,15 @@ find_hp_adapter(const char *s1, size_t len1,
 				*h2 = i;
 			break;
 		}
-		if (adapter1 && !mmcmp(s1+i, adapter1, min(len1-i, a1len))) {
-			*a1 = i;
-			if (adapter2 && !mmcmp(s2+i, adapter2, min(len2-i, a2len)))
-				*a2 = i;
-			break;
-		}
 	}
 
-	if (!*h2 && !*a2) {
+	if (!*h2) {
 		for (i=0; i<len2; i++) {
 			if (!mmcmp(s2+i, rhairpin, min(len2-i, hlen))) {
 				*h2 = i;
 				break;
 			}
-			if (adapter2 && !mmcmp(s2+i, adapter2, min(len2-i, a2len))) {
-				*a2 = i;
-				break;
-			}
 		}
-	}
-
-	if (*h1 || *h2) {
-		// Y-hairpin
-		return 1;
-	} else if (*a1 || *a2) {
-		// Y-Y
-		if ((*a1 && *a1 > len1 - adapter_matchlen) ||
-		    (*a2 && *a2 > len2 - adapter_matchlen))
-			// not confident
-			return 0;
-		return 2;
-	} else {
-		// nothing found
-		return 0;
 	}
 }
 
@@ -348,12 +317,11 @@ correct_s1s2(char *s1, char *q1, size_t len1,
 		const char *hairpin, const char *rhairpin, size_t hlen,
 		int phred_scale_in, int phred_scale_out)
 {
-	int h1, h2, a1, a2;
+	int h1, h2;
 
 	find_hp_adapter(s1, len1, s2, len2,
 			hairpin, rhairpin, hlen,
-			NULL, NULL, 0, 0, 0,
-			&h1, &h2, &a1, &a2);
+			&h1, &h2);
 
 	if (h1 != 0 && h2 != 0 && h1 != h2)
 		// dislocated hairpins

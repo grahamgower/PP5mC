@@ -37,8 +37,6 @@ KSEQ_INIT(gzFile, gzread);
 typedef struct {
 	char *hairpin, *rhairpin; // Hairpin sequence, reverse complement.
 	size_t hlen; // Hairpin length.
-	char *a1, *a2; // Adapter 1 and 2 sequences.
-	size_t a1len, a2len;
 	char *fn1, *fn2; // Input filenames.
 	char *metrics_fn;
 	FILE *fos; // File pointer for outputting sequences.
@@ -50,11 +48,8 @@ typedef struct {
 typedef struct {
 	uint64_t total_reads;
 	uint64_t folded;
-	uint64_t confident_yy;
 	uint64_t hairpin_complete;
 	uint64_t hairpin_dislocated;
-	uint64_t adapter_no_hp;
-	uint64_t adapter_no_hp_dislocated;
 } metrics_t;
 
 /*
@@ -70,10 +65,9 @@ fold(const opt_t *opt, metrics_t *metrics,
 {
 	char *s_out, *q_out;
 	int mm;
-	int adapter;
 
-	// hairpin and adapter indices
-	int h1, h2, a1, a2;
+	// hairpin indices
+	int h1, h2;
 
 	if (len1 != len2) {
 		fprintf(stderr, "Error: input r1/r2 reads have different lengths.\n");
@@ -92,111 +86,67 @@ fold(const opt_t *opt, metrics_t *metrics,
 		exit(-2);
 	}
 
-	adapter = find_hp_adapter(s1, len1,
-				s2, len2,
-				opt->hairpin, opt->rhairpin,
-				opt->hlen,
-				opt->a1, opt->a2,
-				opt->a1len, opt->a2len,
-				opt->adapter_matchlen,
-				&h1, &h2,
-				&a1, &a2);
-	switch (adapter) {
-	case 1:
-		// Y-hairpin molecule
-		if (h1 && h2) {
-			if (h1 != h2 && h1 < len1-opt->adapter_matchlen && h2 < len2-opt->adapter_matchlen) {
-				// polymerase slippage? chimera?
-				metrics->hairpin_dislocated++;
-				//fprintf(stderr, "PCR SLIP: %d\n", h1-h2);
-				goto discard_reads;
-			}
+	find_hp_adapter(s1, len1, s2, len2,
+			opt->hairpin, opt->rhairpin, opt->hlen,
+			&h1, &h2);
+
+	if (h1 && h2) {
+		if (h1 != h2 && h1 < len1-opt->adapter_matchlen && h2 < len2-opt->adapter_matchlen) {
+			// polymerase slippage? chimera?
+			metrics->hairpin_dislocated++;
+			//fprintf(stderr, "PCR SLIP: %d\n", h1-h2);
+			goto discard_reads;
 		}
-		if (h1 && !h2)
-			h2 = h1;
-		if (h2 && !h1)
-			h1 = h2;
+	}
+	if (h1 && !h2)
+		h2 = h1;
+	if (h2 && !h1)
+		h1 = h2;
 
-		if (h1+opt->hlen < len1 && h2+opt->hlen < len2) {
-			// short molecule, there are valid bases after the hairpin
-			const char *s3 = s1 + h1 + opt->hlen;
-			const char *q3 = q1 + h1 + opt->hlen;
-			const char *s4 = s2 + h2 + opt->hlen;
-			const char *q4 = q2 + h2 + opt->hlen;
+	h1 = h2 = min(h1, h2);
 
-			int len3 = 2*h1+opt->hlen > len1 ? len1 - h1 - opt->hlen : h1;
-			int len4 = 2*h2+opt->hlen > len2 ? len2 - h2 - opt->hlen : h2;
-			len1 = h1;
-			len2 = h2;
+	if (h1+opt->hlen <= len1 && h2+opt->hlen <= len2)
+		metrics->hairpin_complete++;
 
-			metrics->hairpin_complete++;
-			mm = match4(s1, q1, len1,
-					s2, q2, len2,
-					s3, q3, len3,
-					s4, q4, len4,
-					s_out, q_out,
-					opt->phred_scale_in,
-					opt->phred_scale_out);
-		} else {
-			// long molecule, just match up to the hairpin
-			len1 = h1;
-			len2 = h2;
-			mm = match2(s1, q1, len1,
-					s2, q2, len2,
-					s_out, q_out,
-					1,
-					opt->phred_scale_in,
-					opt->phred_scale_out);
-		}
-		break;
-	case 2:
-		// Y-Y molecule
-		if (a1 < len1-opt->a1len && a2 < len2-opt->a2len) {
-			metrics->adapter_no_hp++;
-			if (a1 && a2 && a1 != a2)
-				metrics->adapter_no_hp_dislocated++;
-		}
-		/*
-		if (a1 && !a2)
-			a2 = a1;
-		if (a2 && !a1)
-			a1 = a2;
+	if (h1+opt->hlen < len1 && h2+opt->hlen < len2) {
+		// short molecule, there are valid bases after the hairpin
+		const char *s3 = s1 + h1 + opt->hlen;
+		const char *q3 = q1 + h1 + opt->hlen;
+		const char *s4 = s2 + h2 + opt->hlen;
+		const char *q4 = q2 + h2 + opt->hlen;
+		int len3 = 2*h1+opt->hlen > len1 ? len1 - h1 - opt->hlen : h1;
+		int len4 = 2*h2+opt->hlen > len2 ? len2 - h2 - opt->hlen : h2;
 
-		len1 = a1;
-		len2 = a2;
+		len1 = h1;
+		len2 = h2;
 
-		revcomp(s2, len2);
-		reverse(q2, len2);
-
-		mm = match2(opt, s1, q1, len1, s2, q2, len2, s_out, q_out, 0);
-		if (mm <= maxdiff(len1+len2, AVG_ERR, MAXDIFF_THRES))
-			metrics->confident_yy++;
-
-		break;
-		*/
-		goto discard_reads;
-	case 0:
-		// long molecule, try Y-hairpin
+		mm = match4(s1, q1, len1,
+				s2, q2, len2,
+				s3, q3, len3,
+				s4, q4, len4,
+				s_out, q_out,
+				opt->phred_scale_in,
+				opt->phred_scale_out);
+	} else {
+		// long molecule, just match up to the hairpin
+		len1 = h1;
+		len2 = h2;
 		mm = match2(s1, q1, len1,
 				s2, q2, len2,
 				s_out, q_out,
 				1,
 				opt->phred_scale_in,
 				opt->phred_scale_out);
-		break;
 	}
 
 	s_out[min(len1,len2)] = '\0';
 	q_out[min(len1,len2)] = '\0';
 
 	if (mm <= maxdiff(len1+len2, AVG_ERR, MAXDIFF_THRES)) {
-		if (adapter == 0)
-			adapter = 1;
-		if (adapter == 1)
-			metrics->folded++;
+		metrics->folded++;
 		*_s_out = s_out;
 		*_q_out = q_out;
-		return adapter;
+		return 1;
 	} else {
 discard_reads:
 		free(s_out);
@@ -351,13 +301,6 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 			(uintmax_t)metrics->hairpin_complete);
 	fprintf(fp, "Number of read pairs with dislocated hairpins: %jd\n",
 			(uintmax_t)metrics->hairpin_dislocated);
-	fprintf(fp, "Number of read pairs with adapter (no hairpin): %jd\n",
-			(uintmax_t)metrics->adapter_no_hp);
-	fprintf(fp, "Number of read pairs with dislocated adapter (no hairpin): %jd\n",
-			(uintmax_t)metrics->adapter_no_hp_dislocated);
-	/*fprintf(fp, "Number of confidently identified Y-Y adapter read pairs: %jd\n",
-			(uintmax_t)metrics->confident_yy);
-	*/
 
 	if (fp != stderr)
 		fclose(fp);
@@ -366,14 +309,12 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 void
 usage(char *argv0)
 {
-	fprintf(stderr, "foldreads v6\n");
+	fprintf(stderr, "foldreads v7\n");
 	fprintf(stderr, "usage: %s [...] -p SEQ -1 IN1.FQ -2 IN2.FQ\n", argv0);
 	fprintf(stderr, " -o OUT.FQ         Fastq output file [stdout]\n");
 	fprintf(stderr, " -m FILE           Metrics output file [stderr]\n");
 	fprintf(stderr, " -u PREFIX         Filename prefix for unfolded reads []\n");
 	fprintf(stderr, " -p SEQ            The hairpin SEQuence\n");
-	fprintf(stderr, " -a SEQ            Adapter 1 SEQuence\n");
-	fprintf(stderr, " -A SEQ            Adapter 2 SEQuence\n");
 	fprintf(stderr, " -1 IN1.FQ[.GZ]    R1 fastq input file\n");
 	fprintf(stderr, " -2 IN2.FQ[.GZ]    R2 fastq input file\n");
 	exit(-1);
@@ -396,7 +337,7 @@ main(int argc, char **argv)
 	opt.phred_scale_out = 33;
 	opt.adapter_matchlen = 9;
 
-	while ((c = getopt(argc, argv, "o:m:p:u:a:A:1:2:")) != -1) {
+	while ((c = getopt(argc, argv, "o:m:p:u:1:2:")) != -1) {
 		switch (c) {
 			case 'o':
 				fos_fn = optarg;
@@ -409,12 +350,6 @@ main(int argc, char **argv)
 				break;
 			case 'u':
 				unmatched_pfx = optarg;
-				break;
-			case 'a':
-				opt.a1 = optarg;
-				break;
-			case 'A':
-				opt.a2 = optarg;
 				break;
 			case '1':
 				opt.fn1 = optarg;
@@ -437,14 +372,7 @@ main(int argc, char **argv)
 		usage(argv[0]);
 	}
 
-	if (opt.a1 == NULL || opt.a2 == NULL) {
-		fprintf(stderr, "Error: must specify adapter sequences.\n");
-		usage(argv[0]);
-	}
-
 	opt.hlen = strlen(opt.hairpin);
-	opt.a1len = strlen(opt.a1);
-	opt.a2len = strlen(opt.a2);
 
 	if (opt.hlen < 5 || opt.hlen > 1000) {
 		fprintf(stderr, "Error: hairpin too %s (len=%zd).\n",
@@ -452,26 +380,8 @@ main(int argc, char **argv)
 		usage(argv[0]);
 	}
 
-	if (opt.a1len < 5 || opt.a1len > 1000) {
-		fprintf(stderr, "Error: adapter 1 too %s (len=%zd).\n",
-				opt.a1len<5?"short":"long", opt.a1len);
-		usage(argv[0]);
-	}
-
-	if (opt.a2len < 5 || opt.a2len > 1000) {
-		fprintf(stderr, "Error: adapter 2 too %s (len=%zd).\n",
-				opt.a2len<5?"short":"long", opt.a2len);
-		usage(argv[0]);
-	}
-
 	for (i=0; i<opt.hlen; i++)
 		opt.hairpin[i] = toupper(opt.hairpin[i]);
-
-	for (i=0; i<opt.a1len; i++)
-		opt.a1[i] = toupper(opt.a1[i]);
-
-	for (i=0; i<opt.a2len; i++)
-		opt.a2[i] = toupper(opt.a2[i]);
 
 	opt.rhairpin = strdup(opt.hairpin);
 	revcomp(opt.rhairpin, opt.hlen);

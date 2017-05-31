@@ -14,16 +14,12 @@ revcomp(char *s, size_t len);
 void
 reverse(char *s, size_t len);
 
-int
+void
 find_hp_adapter(const char *s1, size_t len1,
 		const char *s2, size_t len2,
 		const char *hairpin, const char *rhairpin,
 		size_t hlen,
-		const char *adapter1, const char *adapter2,
-		size_t a1len, size_t a2len,
-		size_t adapter_matchlen,
-		int *h1, int *h2,
-		int *a1, int *a2);
+		int *h1, int *h2);
 
 int
 match2(const char *s1, const char *q1, size_t len1,
