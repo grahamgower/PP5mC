@@ -21,10 +21,8 @@ fold() {
 	unpigz -c $data/${pfx}*R1.fastq.gz > $f1 &
 	unpigz -c $data/${pfx}*R2.fastq.gz > $f2 &
 
-	foldreads2 \
+	foldreads \
 		-p $hairpin \
-		-a $adapter1 \
-		-A $adapter2 \
 		-m ${pfx}.metrics \
 		-1 $f1 \
 		-2 $f2 \

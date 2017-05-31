@@ -3,10 +3,6 @@
 hairpin=ACGCCGGCGGCAAGTGAAGCCGCCGGCGT
 hlen=`echo -n $hairpin | wc -c`
 
-# sequences observed if we read too far off the end of a molecule
-adapter1=AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC
-adapter2=AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTA
-
 # Data directory containing fastq files, which must have .fastq.gz extension.
 data=/localscratch/grg/fold-bovids/data
 
