@@ -3,9 +3,9 @@ CFLAGS=-I$(HTSDIR) -Wall -g -O2
 LDFLAGS=-L$(HTSDIR)
 LIBS= #-Wl,-Bstatic -lhts -lz -Wl,-Bdynamic -lm
 
-all: foldreads foldreads2 mark_5mC scan_pairs
+all: foldreads2 mark_5mC scan_pairs
 
-foldreads2: foldreads2.o
+foldreads2: foldreads2.o fold.o
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS) -Wl,-Bstatic -lz -Wl,-Bdynamic -lm
 
 foldreads: foldreads.o

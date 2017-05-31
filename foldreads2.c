@@ -24,10 +24,12 @@
 #include <math.h>
 #include <assert.h>
 #include <zlib.h>
-#include "kseq.h"
 #include "khash.h"
 
+#include "kseq.h"
 KSEQ_INIT(gzFile, gzread);
+
+#include "fold.h"
 
 #define min(a,b) ((a)<(b)?(a):(b))
 #define max(a,b) ((a)>(b)?(a):(b))
@@ -54,283 +56,6 @@ typedef struct {
 	uint64_t adapter_no_hp;
 	uint64_t adapter_no_hp_dislocated;
 } metrics_t;
-
-static char cmap[] = {['A']='T', ['C']='G', ['G']='C', ['T']='A', ['N']='N', ['n']='N',
-				['a']='t', ['c']='g', ['g']='c', ['t']='a'};
-
-/*
- * Inverse poisson CDF, stolen from bwa: bwtaln.c
- */
-#define AVG_ERR 0.02
-#define MAXDIFF_THRES 0.01
-#define MAXLEN 1000
-int
-bwa_cal_maxdiff(int l, double err, double thres)
-{
-	double elambda = exp(-l * err);
-	double sum, y = 1.0;
-	int k, x = 1;
-	for (k = 1, sum = elambda; k < MAXLEN; ++k) {
-		y *= l * err;
-		x *= k;
-		sum += elambda * y / x;
-		if (1.0 - sum < thres) return k;
-	}
-	return 2;
-}
-
-int
-maxdiff(int l, double err, double thres)
-{
-	static int maxdiff[MAXLEN];
-	static int init = 0;
-
-	if (!init) {
-		int i;
-		for (i=0; i<MAXLEN; i++)
-			maxdiff[i] = bwa_cal_maxdiff(i, err, thres);
-		init = 1;
-	}
-
-	return l<MAXLEN ? maxdiff[l] : maxdiff[MAXLEN-1];
-}
-
-/*
- * Reverse complement of s.
- */
-void
-revcomp(char *s, size_t len)
-{
-	int i, j;
-	int tmp;
-
-	for (i=0, j=len-1; i<len/2; i++, j--) {
-		tmp = cmap[(int)s[i]];
-		s[i] = cmap[(int)s[j]];
-		s[j] = tmp;
-	}
-
-	if (len % 2 == 1)
-		s[i] = cmap[(int)s[i]];
-}
-
-/*
- * Reverse s (no complement).
- */
-void
-reverse(char *s, size_t len)
-{
-	int i, j;
-	int tmp;
-
-	for (i=0, j=len-1; i<len/2; i++, j--) {
-		tmp = s[i];
-		s[i] = s[j];
-		s[j] = tmp;
-	}
-}
-
-/* 
- * Compare len bytes of s1 and s2, allowing mismatches.
- * Return 0 for a match, -1 otherwise.
- */
-int
-mmcmp(const char *s1, const char *s2, size_t len)
-{
-	int i, mm;
-
-	mm = maxdiff(len, AVG_ERR, MAXDIFF_THRES);
-
-	for (i=0; i<len; i++) {
-		mm -= (s1[i] != s2[i]);
-		if (mm < 0)
-			return -1;
-	}
-
-	return 0;
-}
-
-/*
- * Search s1 and s2 for hairpin and adapter sequences.
- */
-int
-find_hp_adapter(const opt_t *opt,
-		const char *s1, size_t len1,
-		const char *s2, size_t len2,
-		int *h1, int *h2,
-		int *a1, int *a2)
-{
-	int i;
-
-	*h1 = 0;
-	*h2 = 0;
-	*a1 = 0;
-	*a2 = 0;
-
-	for (i=0; i<len1; i++) {
-		if (!mmcmp(s1+i, opt->hairpin, min(len1-i, opt->hlen))) {
-			*h1 = i;
-			if (!mmcmp(s2+i, opt->rhairpin, min(len2-i, opt->hlen)))
-				*h2 = i;
-			break;
-		}
-		if (!mmcmp(s1+i, opt->a1, min(len1-i, opt->a1len))) {
-			*a1 = i;
-			if (!mmcmp(s2+i, opt->a2, min(len1-i, opt->a2len)))
-				*a2 = i;
-			break;
-		}
-	}
-
-
-	if (!*h2 && !*a2) {
-		for (i=0; i<len2; i++) {
-			if (!mmcmp(s2+i, opt->rhairpin, min(len2-i, opt->hlen))) {
-				*h2 = i;
-				break;
-			}
-			if (!mmcmp(s2+i, opt->a2, min(len1-i, opt->a2len))) {
-				*a2 = i;
-				break;
-			}
-		}
-	}
-
-	if (*h1 || *h2) {
-		// Y-hairpin
-		return 1;
-	} else if (*a1 || *a2) {
-		// Y-Y
-		if ((*a1 && *a1 > len1 - opt->adapter_matchlen) ||
-		    (*a2 && *a2 > len2 - opt->adapter_matchlen))
-			// not confident
-			return 0;
-		return 2;
-	} else {
-		// nothing found
-		return 0;
-	}
-}
-
-int
-match2(const opt_t *opt,
-		const char *s1, const char *q1, size_t len1,
-		const char *s2, const char *q2, size_t len2,
-		char *s_out, char *q_out, int allow_bs)
-{
-	int i;
-	int mm = 0;
-	int n_count = 0;
-	int len = min(len1, len2);
-
-	for (i=0; i<len; i++) {
-
-		char c1 = toupper(s1[i]);
-		char c2 = toupper(s2[i]);
-
-		if (c1 == 'N' || c2 == 'N') {
-			// Use the other read, if we can.
-			s_out[i] = c2 == 'N' ? c1 : c2;
-			q_out[i] = (c2 == 'N' ? q1[i] : q2[i]) -opt->phred_scale_in + opt->phred_scale_out;
-			n_count++;
-			continue;
-		}
-
-		if (c1 == c2) {
-			if (allow_bs && (c2 == 'C' || c2 == 'G'))
-				// Unconverted C<->G.
-				c2 = tolower(c2);
-			s_out[i] = c2;
-			q_out[i] = min((int)q1[i]+(int)q2[i]-2*opt->phred_scale_in, 40) +opt->phred_scale_out;
-		} else if (allow_bs && ((c1 == 'T' && c2 == 'C') || (c1 == 'G' && c2 == 'A'))) {
-			// Putatively damaged, or bisulfite converted.
-			s_out[i] = c2 == 'C' ? 'C' : 'G';
-			q_out[i] = min((int)q1[i]+(int)q2[i]-2*opt->phred_scale_in, 40) +opt->phred_scale_out;
-		} else {
-			// Mismatch, take highest quality base.
-			if (q1[i] > q2[i]) {
-				s_out[i] = c1;
-				q_out[i] = max((int)q1[i]-(int)q2[i], 0) +opt->phred_scale_out;
-			} else if (q1[i] < q2[i]) {
-				s_out[i] = c2;
-				q_out[i] = max((int)q2[i]-(int)q1[i], 0) +opt->phred_scale_out;
-			} else {
-				s_out[i] = 'N';
-				q_out[i] = opt->phred_scale_out;
-			}
-			mm++;
-		}
-	}
-
-	// add length mismatch
-	//mm += abs(len1-len2);
-
-	if (3*n_count > len)
-		// I don't trust this pair of reads
-		mm += n_count;
-
-	return mm;
-}
-
-int
-match4(const opt_t *opt,
-		const char *_s1, const char *_q1, size_t len1,
-		const char *_s2, const char *_q2, size_t len2,
-		const char *_s3, const char *_q3, size_t len3,
-		const char *_s4, const char *_q4, size_t len4,
-		char *s_out, char *q_out)
-{
-	int mm;
-	char *mem, *s1, *s2, *s3, *s4, *q1, *q2, *q3, *q4;
-
-	assert(len1 >= len4);
-	assert(len2 >= len3);
-
-	mem = malloc(2*(len1+len2+len3+len4));
-	if (mem == NULL) {
-		perror("malloc");
-		exit(1);
-	}
-
-	s1 = mem;
-	s2 = s1+len1;
-	s3 = s2+len2;
-	s4 = s3+len3;
-	q1 = s4+len4;
-	q2 = q1+len1;
-	q3 = q2+len2;
-	q4 = q3+len3;
-
-	memcpy(s1, _s1, len1);
-	memcpy(s2, _s2, len2);
-	memcpy(s3, _s3, len3);
-	memcpy(s4, _s4, len4);
-	memcpy(q1, _q1, len1);
-	memcpy(q2, _q2, len2);
-	memcpy(q3, _q3, len3);
-	memcpy(q4, _q4, len4);
-
-	/*
-	 * We first match the top strand to the bottom strand, where errors
-	 * are presumably induced by the sequencing platform (match s1 to s4
-	 * and s2 to s3).  Sequences from either side of the hairpin are then
-	 * matched, where errors are induced by polymerase or the sequencing
-	 * platform.
-	 */
-	revcomp(s4, len4);
-	reverse(q4, len4);
-	match2(opt, s1+len1-len4, q1+len1-len4, len4, s4, q4, len4, s1+len1-len4, q1+len1-len4, 0);
-
-	revcomp(s3, len3);
-	reverse(q3, len3);
-	match2(opt, s2+len2-len3, q2+len2-len3, len3, s3, q3, len3, s2+len2-len3, q2+len2-len3, 0);
-
-	mm = match2(opt, s1, q1, len1, s2, q2, len2, s_out, q_out, 1);
-
-	free(mem);
-
-	return mm;
-}
 
 /*
  * Fold the input sequences, s1 and s2.
@@ -367,7 +92,15 @@ fold(const opt_t *opt, metrics_t *metrics,
 		exit(-2);
 	}
 
-	adapter = find_hp_adapter(opt, s1, len1, s2, len2, &h1, &h2, &a1, &a2);
+	adapter = find_hp_adapter(s1, len1,
+				s2, len2,
+				opt->hairpin, opt->rhairpin,
+				opt->hlen,
+				opt->a1, opt->a2,
+				opt->a1len, opt->a2len,
+				opt->adapter_matchlen,
+				&h1, &h2,
+				&a1, &a2);
 	switch (adapter) {
 	case 1:
 		// Y-hairpin molecule
@@ -397,12 +130,23 @@ fold(const opt_t *opt, metrics_t *metrics,
 			len2 = h2;
 
 			metrics->hairpin_complete++;
-			mm = match4(opt, s1, q1, len1, s2, q2, len2, s3, q3, len3, s4, q4, len4, s_out, q_out);
+			mm = match4(s1, q1, len1,
+					s2, q2, len2,
+					s3, q3, len3,
+					s4, q4, len4,
+					s_out, q_out,
+					opt->phred_scale_in,
+					opt->phred_scale_out);
 		} else {
 			// long molecule, just match up to the hairpin
 			len1 = h1;
 			len2 = h2;
-			mm = match2(opt, s1, q1, len1, s2, q2, len2, s_out, q_out, 1);
+			mm = match2(s1, q1, len1,
+					s2, q2, len2,
+					s_out, q_out,
+					1,
+					opt->phred_scale_in,
+					opt->phred_scale_out);
 		}
 		break;
 	case 2:
@@ -433,7 +177,12 @@ fold(const opt_t *opt, metrics_t *metrics,
 		goto discard_reads;
 	case 0:
 		// long molecule, try Y-hairpin
-		mm = match2(opt, s1, q1, len1, s2, q2, len2, s_out, q_out, 1);
+		mm = match2(s1, q1, len1,
+				s2, q2, len2,
+				s_out, q_out,
+				1,
+				opt->phred_scale_in,
+				opt->phred_scale_out);
 		break;
 	}
 
