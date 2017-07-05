@@ -52,7 +52,10 @@ def print_methylkit(f, chrom, start, end, strand, C, mC):
     # coordinate is 1-based
     chrbase = "{}.{}".format(chrom, start+1)
     strand = "FR"[strand == '-']
-    print(chrbase, chrom, start+1, strand, C+mC, C, mC, file=f, sep="\t")
+    print(chrbase, chrom, start+1, strand, C+mC,
+                "{:.2f}".format(100*C/(C+mC)),
+                "{:.2f}".format(100*mC/(C+mC)),
+                file=f, sep="\t")
 
 def print_pileOmeth(f, chrom, start, end, C, mC):
     # coordinates are 0-based, half open
