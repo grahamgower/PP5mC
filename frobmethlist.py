@@ -49,11 +49,13 @@ def parse_args():
     return args
 
 def print_methylkit(f, chrom, start, end, strand, C, mC):
-    chrbase = "{}.{}".format(chrom, start)
+    # coordinate is 1-based
+    chrbase = "{}.{}".format(chrom, start+1)
     strand = "FR"[strand == '-']
-    print(chrbase, chrom, start, strand, C+mC, C, mC, file=f, sep="\t")
+    print(chrbase, chrom, start+1, strand, C+mC, C, mC, file=f, sep="\t")
 
 def print_pileOmeth(f, chrom, start, end, C, mC):
+    # coordinates are 0-based, half open
     print(chrom, start, end, int(100*mC/(C+mC)), mC, C, file=f, sep="\t")
 
 if __name__ == "__main__":
