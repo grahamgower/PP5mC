@@ -53,8 +53,8 @@ def print_methylkit(f, chrom, start, end, strand, C, mC):
     chrbase = "{}.{}".format(chrom, start+1)
     strand = "FR"[strand == '-']
     print(chrbase, chrom, start+1, strand, C+mC,
-                "{:.2f}".format(100*C/(C+mC)),
                 "{:.2f}".format(100*mC/(C+mC)),
+                "{:.2f}".format(100*C/(C+mC)),
                 file=f, sep="\t")
 
 def print_pileOmeth(f, chrom, start, end, C, mC):
