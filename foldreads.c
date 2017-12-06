@@ -309,8 +309,8 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 void
 usage(char *argv0)
 {
-	fprintf(stderr, "foldreads v7\n");
-	fprintf(stderr, "usage: %s [...] -p SEQ -1 IN1.FQ -2 IN2.FQ\n", argv0);
+	fprintf(stderr, "foldreads v8\n");
+	fprintf(stderr, "usage: %s [...] -1 IN1.FQ -2 IN2.FQ\n", argv0);
 	fprintf(stderr, " -o OUT.FQ         Fastq output file [stdout]\n");
 	fprintf(stderr, " -m FILE           Metrics output file [stderr]\n");
 	fprintf(stderr, " -u PREFIX         Filename prefix for unfolded reads []\n");
@@ -336,6 +336,7 @@ main(int argc, char **argv)
 	opt.phred_scale_in = 33;
 	opt.phred_scale_out = 33;
 	opt.adapter_matchlen = 9;
+	opt.hairpin = "ACGCCGGCGGCAAGTGAAGCCGCCGGCGT";
 
 	while ((c = getopt(argc, argv, "o:m:p:u:1:2:")) != -1) {
 		switch (c) {
@@ -364,11 +365,6 @@ main(int argc, char **argv)
 
 	if (opt.fn1 == NULL || opt.fn2 == NULL) {
 		fprintf(stderr, "Error: must specify input files.\n");
-		usage(argv[0]);
-	}
-
-	if (opt.hairpin == NULL) {
-		fprintf(stderr, "Error: must specify a hairpin sequence.\n");
 		usage(argv[0]);
 	}
 
