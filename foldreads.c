@@ -348,6 +348,8 @@ main(int argc, char **argv)
 				break;
 			case 'p':
 				opt.hairpin = optarg;
+				for (i=0; i<strlen(opt.hairpin); i++)
+					opt.hairpin[i] = toupper(opt.hairpin[i]);
 				break;
 			case 'u':
 				unmatched_pfx = optarg;
@@ -376,8 +378,6 @@ main(int argc, char **argv)
 		usage(argv[0]);
 	}
 
-	for (i=0; i<opt.hlen; i++)
-		opt.hairpin[i] = toupper(opt.hairpin[i]);
 
 	opt.rhairpin = strdup(opt.hairpin);
 	revcomp(opt.rhairpin, opt.hlen);
