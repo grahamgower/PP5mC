@@ -497,7 +497,7 @@ void
 usage(char *argv0)
 {
 	fprintf(stderr, "scan_pairs v3\n");
-	fprintf(stderr, "usage: %s [-p SEQ] in.bam\n", argv0);
+	fprintf(stderr, "usage: %s [...] in.bam\n", argv0);
 	fprintf(stderr, " -p SEQ            The hairpin SEQuence\n");
 	exit(1);
 }
@@ -514,11 +514,14 @@ main(int argc, char **argv)
 	opt.min_mapq = 25;
 	opt.min_baseq = 10;
 	opt.metrics_fp = stdout;
+	opt.hairpin = "ACGCCGGCGGCAAGTGAAGCCGCCGGCGT";
 
 	while ((c = getopt(argc, argv, "p:")) != -1) {
 		switch (c) {
 			case 'p':
 				opt.hairpin = optarg;
+				for (i=0; i<strlen(opt.hairpin); i++)
+					opt.hairpin[i] = toupper(opt.hairpin[i]);
 				break;
 			default:
 				usage(argv[0]);
@@ -537,8 +540,6 @@ main(int argc, char **argv)
 		usage(argv[0]);
 	}
 
-	for (i=0; i<opt.hlen; i++)
-		opt.hairpin[i] = toupper(opt.hairpin[i]);
 	opt.rhairpin = strdup(opt.hairpin);
 	revcomp(opt.rhairpin, opt.hlen);
 
