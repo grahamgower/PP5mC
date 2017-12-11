@@ -543,11 +543,14 @@ main(int argc, char **argv)
 	opt.min_baseq = 10;
 	opt.min_5 = 0;
 	opt.min_3 = 0;
+	opt.hairpin = "ACGCCGGCGGCAAGTGAAGCCGCCGGCGT";
 
 	while ((c = getopt(argc, argv, "p:b:M:B:5:3:")) != -1) {
 		switch (c) {
 			case 'p':
 				opt.hairpin = optarg;
+				for (i=0; i<strlen(opt.hairpin); i++)
+					opt.hairpin[i] = toupper(opt.hairpin[i]);
 				break;
 			case 'b':
 				opt.bed_fn = optarg;
@@ -597,8 +600,6 @@ main(int argc, char **argv)
 		usage(argv[0], &opt);
 	}
 
-	for (i=0; i<opt.hlen; i++)
-		opt.hairpin[i] = toupper(opt.hairpin[i]);
 	opt.rhairpin = strdup(opt.hairpin);
 	revcomp(opt.rhairpin, opt.hlen);
 
