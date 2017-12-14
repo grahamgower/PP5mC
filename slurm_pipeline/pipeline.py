@@ -64,8 +64,12 @@ class Pipeline:
             else:
                 job_id = jobscript.JobScript.sub(self, afterok)
 
+            node_txt = "{}\nmem={}, cpus={}, time={}-{}:{}:{}".format(
+                    self.tmpl.name, self.tmpl.mem, self.tmpl.cpus,
+                    self.tmpl.days, self.tmpl.hours, self.tmpl.mins,
+                    self.tmpl.secs)
             # update digraph
-            self.pipeline.dot.node(job_id, self.tmpl.name)
+            self.pipeline.dot.node(job_id, node_txt)
             if afterok:
                 for dep in afterok:
                     self.pipeline.dot.edge(dep, job_id)
@@ -94,10 +98,9 @@ class Pipeline:
 
         self.dot = Digraph()
 
-    def new_job(self, name, nodes=1, cpus=1, mem=16, hrs=0, mins=0):
+    def new_job(self, name, res):
         """A wrapper for creating the JobScript."""
-        j = self.JobScript(name=name, email=self.email, queue=self.queue,
-                nodes=nodes, cpus=cpus, mem=mem, hrs=hrs, mins=mins)
+        j = self.JobScript(name=name, email=self.email, queue=self.queue, res=res)
         j.tmpl.output = "{}/{}.out".format(self.acctdir, name)
         j.pipeline = self
         return j

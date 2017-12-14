@@ -19,29 +19,38 @@ import os
 import tempfile
 import subprocess
 import time
+import math
 from Cheetah.Template import Template
 
 script_template = """#!/bin/sh
 
-### Job name
+### Job name.
 #SBATCH -J $name
+
+#if $queue
+### Queue that job is submitted to.
+#SBATCH -p $queue
+#end if
+
 #if $output
+### Redirect stdout/stderr to this file.
 #SBATCH -o $output
 #end if
+
 #if $email
-### Send email to user when job fails
+### Send email to user when job fails.
 #SBATCH --mail-type=FAIL
-### email address for user
 #SBATCH --mail-user=$email
 #end if
-### Queue name that job is submitted to
-#SBATCH -p $queue
 
-### Request nodes, memory, walltime. NB THESE ARE REQUIRED
-#SBATCH -N $nodes
-#SBATCH -n $cpus
-#SBATCH --time=${hrs}:${mins}:00
+### Request resources.
+#SBATCH --nodes $nodes
+#SBATCH --ntasks $cpus
+#SBATCH --time=${days}-${hours}:${mins}:${secs}
 #SBATCH --mem=${mem}
+
+### Inherit environment variables, so modules may be preloaded.
+#SBATCH --export=ALL
 
 cleanup() {
     ### Empty functions are syntax errors, so use a null command
@@ -74,9 +83,82 @@ ret=\$?
 cleanup
 """
 
+class Resource():
+    def __init__(self, rd, scale):
+        assert isinstance(rd,dict), "Unexpected resource dict: %s" % type(rd)
+        self.scale = scale
+
+        self.nodes = rd.get("nodes", 1)
+
+        if "cpus" in rd:
+            self.cpus = int(rd["cpus"])*scale
+        elif "_cpus" in rd:
+            self.cpus = int(rd["_cpus"])
+        else:
+            self.cpus = 1
+
+        if "mem" in rd:
+            mem = self.siunit(rd["mem"])*scale
+        elif "_mem" in rd:
+            mem = self.siunit(rd["_mem"])
+        else:
+            mem = 16*2**20
+
+        if mem < 2**30:
+            mem_mb = int(math.ceil(mem/float(2**20)))
+            self.mem = str(mem_mb) + "M"
+        else:
+            mem_gb = int(math.ceil(mem/float(2**30)))
+            self.mem = str(mem_gb) + "G"
+
+        t = 0 # time in seconds
+
+        if "secs" in rd:
+            t += float(rd["secs"])*scale
+        elif "_secs" in rd:
+            t += float(rd["_secs"])
+
+        if "mins" in rd:
+            t += 60 * float(rd["mins"])*scale
+        elif "_mins" in rd:
+            t += 60 * float(rd["_mins"])
+
+        if "hours" in rd:
+            t += 60*60 * float(rd["hours"])*scale
+        elif "_hours" in rd:
+            t += 60*60 * float(rd["_hours"])
+
+        # round up
+        t += math.ceil(t)
+
+        self.days = int(t // (24*60*60))
+        t -= self.days * (24*60*60)
+        self.hours = int(t // (60*60))
+        t -= self.hours * (60*60)
+        self.mins = int(t // 60)
+        t -= self.mins * 60
+        self.secs = int(t)
+
+    def siunit(self, s):
+        # XXX: Does Slurm use 1000*1000 for megabyte, or 1024*1024?
+        x = 1
+        if s[-1] in "Bb":
+            s = s[:-1]
+        if s[-1] in "Kk":
+            # K is kinda dubious for memory but slurm accepts it
+            s = s[:-1]
+            x = 2**10
+        elif s[-1] in "Mm":
+            s = s[:-1]
+            x = 2**20
+        elif s[-1] in "Gg":
+            s = s[:-1]
+            x = 2**30
+        return float(s)*x
+
 class JobScript:
     """
-    A class for creating and submitting robust SLURM job scripts.
+    A class for creating and submitting Slurm job scripts.
 
     Each command added to the job script has the exit status checked and the
     job will fail if it is non zero.  Cleanup commands are executed regardless
@@ -90,9 +172,10 @@ class JobScript:
     ST_success = set(["COMPLETED"])
     ST_incomplete = set(["CONFIGURING", "COMPLETING", "PENDING", "RUNNING", "RESIZING", "SUSPENDED"])
 
-    def __init__(self, name="mr_jobby", email=None,
-            queue="test", nodes=1, cpus=1, mem=16,
-            hrs=0, mins=0):
+    def __init__(self, name="mr_jobby", email=None, queue=None,
+            nodes=1, cpus=1, mem=16,
+            days=0, hours=0, mins=0, secs=0,
+            res=None):
         self.filename = None
         self.jobid = None
 
@@ -104,14 +187,27 @@ class JobScript:
         self.tmpl.output = None
         self.tmpl.email = email
         self.tmpl.queue = queue
-        self.tmpl.nodes = nodes
-        self.tmpl.cpus = cpus
-        self.tmpl.mem = mem
-        self.tmpl.hrs = hrs
-	if hrs == 0 and mins == 0:
-	        self.tmpl.mins = 5
-	else:
-		self.tmpl.mins = mins
+
+        if res is not None:
+            assert isinstance(res, Resource), "Unexpected resource type: %s" % type(Resource)
+            self.tmpl.nodes = res.nodes
+            self.tmpl.cpus = res.cpus
+            self.tmpl.mem = res.mem
+            self.tmpl.days = res.days
+            self.tmpl.hours = res.hours
+            self.tmpl.mins = res.mins
+            self.tmpl.secs = res.secs
+        else:
+            self.tmpl.nodes = nodes
+            self.tmpl.cpus = cpus
+            self.tmpl.mem = mem
+            self.tmpl.days = days
+            self.tmpl.hours = hours
+            if days == 0 and hours == 0 and mins == 0:
+                    self.tmpl.mins = 5
+            else:
+                    self.tmpl.mins = mins
+            self.tmpl.secs = secs
 
     def add_cmd(self, cmd):
         """Add a command to be run"""
@@ -128,7 +224,7 @@ class JobScript:
         self.tmpl.cleanup_commands.append(cmd)
 
     def write(self, filename):
-        """Write out a SBATCH job script to the specified file."""
+        """Write a job script to the specified file."""
 
         self.filename = filename
         with open(filename, "w") as f:
@@ -154,7 +250,7 @@ class JobScript:
 
     def sub(self, afterok=None):
         """
-        Submit job to SLURM.
+        Submit job to Slurm using sbatch(1).
 
         afterok -- job dependencies, a job id or list of job ids after which
                    this job should run.
