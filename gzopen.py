@@ -15,13 +15,17 @@ class gzopen:
     """
     def __init__(self, fn, mode="r", gz=False):
 
+        folder = os.path.dirname(fn)
+        if not folder:
+            folder = "."
+
         # check for existence/permission
         if ("r" in mode and not os.path.exists(fn)) or \
-                ("w" in mode and not os.path.exists(os.path.dirname(os.path.dirname(fn)))):
+                ("w" in mode and not os.path.exists(folder)):
             raise OSError(os.errno.ENOENT, os.strerror(os.errno.ENOENT), fn)
 
         if ("r" in mode and not os.access(fn, os.R_OK)) or \
-                ("w" in mode and not os.access(os.path.dirname(os.path.dirname(fn)), os.W_OK)):
+                ("w" in mode and not os.access(folder, os.W_OK)):
             raise OSError(os.errno.EACCES, os.strerror(os.errno.EACCES), fn)
 
         if not gz and not fn.endswith(".gz"):
