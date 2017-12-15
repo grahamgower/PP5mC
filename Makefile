@@ -1,4 +1,4 @@
-HTSDIR=../../../htslib
+HTSDIR=../htslib
 CFLAGS=-I$(HTSDIR) -Wall -g -O2
 LDFLAGS=-L$(HTSDIR)
 LIBS= #-Wl,-Bstatic -lhts -lz -Wl,-Bdynamic -lm
