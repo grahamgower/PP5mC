@@ -161,21 +161,33 @@ find_hp_adapter(const char *s1, size_t len1,
 static inline double
 q2p(int q)
 {
-	if (q <= 1)
-		return 0.75;
-	if (q > 40)
-		q = 40;
-	return pow(10.0, -q/10.0);
+	static int q2p_cache_inited = 0;
+	static double q2p_cache[PHRED_MAX];
+
+	if (q2p_cache_inited)
+		return q2p_cache[q];
+
+	int x;
+
+	// probability of error for random nucleotide
+	q2p_cache[0] = q2p_cache[1] = 0.75;
+
+	for (x=2; x<PHRED_MAX; x++)
+		q2p_cache[x] = pow(10, -x/10.0);
+
+	q2p_cache_inited = 1;
+	return q2p_cache[q];
 }
 
+#define Q_MAX 40
 static inline int
 p2q(double p)
 {
 	if (p == 0)
-		return 40;
+		return Q_MAX;
 	int q = -round(10.0*log10(p));
-	if (q > 40)
-		q = 40;
+	if (q > Q_MAX)
+		q = Q_MAX;
 	return q;
 }
 
