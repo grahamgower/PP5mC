@@ -316,7 +316,7 @@ usage(char *argv0)
 	fprintf(stderr, " -o OUT.FQ         Fastq output file [stdout]\n");
 	fprintf(stderr, " -m FILE           Metrics output file [stderr]\n");
 	fprintf(stderr, " -u PREFIX         Filename prefix for unfolded reads []\n");
-	fprintf(stderr, " -p SEQ            The hairpin SEQuence\n");
+	fprintf(stderr, " -p SEQ            The hairpin SEQuence [ACGCCGGCGGCAAGTGAAGCCGCCGGCGT]\n");
 	fprintf(stderr, " -1 IN1.FQ[.GZ]    R1 fastq input file\n");
 	fprintf(stderr, " -2 IN2.FQ[.GZ]    R2 fastq input file\n");
 	exit(-1);
