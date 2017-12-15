@@ -311,7 +311,7 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 void
 usage(char *argv0)
 {
-	fprintf(stderr, "foldreads v8\n");
+	fprintf(stderr, "foldreads v9\n");
 	fprintf(stderr, "usage: %s [...] -1 IN1.FQ -2 IN2.FQ\n", argv0);
 	fprintf(stderr, " -o OUT.FQ         Fastq output file [stdout]\n");
 	fprintf(stderr, " -m FILE           Metrics output file [stderr]\n");
