@@ -179,6 +179,19 @@ p2q(double p)
 	return q;
 }
 
+/*
+ * Expected number of wrong bases.
+ */
+int
+posterior_error(const char *qvec, int len, int phred_scale_in)
+{
+	int i;
+	double sum_p = 0;
+	for (i=0; i<len; i++)
+		sum_p += q2p(qvec[i]-phred_scale_in);
+	return round(sum_p);
+}
+
 static uint _n2i[] = {['A']=0, ['C']=1, ['G']=2, ['T']=3};
 #define n2i(nt) _n2i[(uint)nt]
 
@@ -352,7 +365,7 @@ match1bp(char c1, char c2, char q1, char q2,
 	*q_out += phred_scale_out;
 }
 
-int
+void
 match2(const char *s1, const char *q1, size_t len1,
 	const char *s2, const char *q2, size_t len2,
 	char *s_out, char *q_out,
@@ -362,19 +375,12 @@ match2(const char *s1, const char *q1, size_t len1,
 	int i;
 	int len = min(len1, len2);
 
-	// expected number of mismatches
-	double sum_p = 0;
-
 	for (i=0; i<len; i++) {
 		match1bp(s1[i], s2[i], q1[i], q2[i],
 				s_out+i, q_out+i,
 				allow_bs,
 				phred_scale_in, phred_scale_out);
-
-		sum_p += q2p(q_out[i]-phred_scale_out);
 	}
-
-	return (int)round(sum_p);
 }
 
 /*
@@ -387,7 +393,7 @@ match2(const char *s1, const char *q1, size_t len1,
  * discordance is mostly from bisulfite conversion but might also be
  * from errors during sequencing or polymerase copying.
  */
-int
+void
 match4(const char *_s1, const char *_q1, size_t len1,
 	const char *_s2, const char *_q2, size_t len2,
 	const char *_s3, const char *_q3, size_t len3,
@@ -395,7 +401,6 @@ match4(const char *_s1, const char *_q1, size_t len1,
 	char *s_out, char *q_out,
 	int phred_scale_in, int phred_scale_out)
 {
-	int mm;
 	char *mem, *s1, *s2, *s3, *s4, *q1, *q2, *q3, *q4;
 
 	assert(len1 >= len4);
@@ -439,7 +444,7 @@ match4(const char *_s1, const char *_q1, size_t len1,
 		s2+len2-len3, q2+len2-len3,
 		0, phred_scale_in, phred_scale_out);
 
-	mm = match2(s1, q1, len1,
+	match2(s1, q1, len1,
 			s2, q2, len2,
 			s_out, q_out,
 			1, phred_scale_in, phred_scale_out);
@@ -463,12 +468,10 @@ match4(const char *_s1, const char *_q1, size_t len1,
 		printf("\n");
 		for (i=0; i<min(len1, len2); i++)
 			putchar(q_out[i]);
-		printf("\nmm=%d\n\n", mm);
+		printf("\n\n", mm);
 	}*/
 
 	free(mem);
-
-	return mm;
 }
 
 /*

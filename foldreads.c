@@ -120,7 +120,7 @@ fold(const opt_t *opt, metrics_t *metrics,
 		len1 = h1;
 		len2 = h2;
 
-		mm = match4(s1, q1, len1,
+		match4(s1, q1, len1,
 				s2, q2, len2,
 				s3, q3, len3,
 				s4, q4, len4,
@@ -131,7 +131,7 @@ fold(const opt_t *opt, metrics_t *metrics,
 		// long molecule, just match up to the hairpin
 		len1 = h1;
 		len2 = h2;
-		mm = match2(s1, q1, len1,
+		match2(s1, q1, len1,
 				s2, q2, len2,
 				s_out, q_out,
 				1,
@@ -141,6 +141,8 @@ fold(const opt_t *opt, metrics_t *metrics,
 
 	s_out[min(len1,len2)] = '\0';
 	q_out[min(len1,len2)] = '\0';
+
+	mm = posterior_error(q_out, min(len1,len2), opt->phred_scale_out);
 
 	if (mm <= maxdiff(len1+len2, AVG_ERR, MAXDIFF_THRES)) {
 		metrics->folded++;

@@ -22,13 +22,16 @@ find_hp_adapter(const char *s1, size_t len1,
 		int *h1, int *h2);
 
 int
+posterior_error(const char *qvec, int len, int phred_scale_in);
+
+void
 match2(const char *s1, const char *q1, size_t len1,
 	const char *s2, const char *q2, size_t len2,
 	char *s_out, char *q_out,
 	int allow_bs,
 	int phred_scale_in, int phred_scale_out);
 
-int
+void
 match4(const char *_s1, const char *_q1, size_t len1,
 	const char *_s2, const char *_q2, size_t len2,
 	const char *_s3, const char *_q3, size_t len3,
