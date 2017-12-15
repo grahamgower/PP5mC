@@ -28,6 +28,10 @@ static char cmap[] = {['A']='T', ['C']='G', ['G']='C', ['T']='A', ['N']='N', ['n
 #define min(a,b) ((a)<(b)?(a):(b))
 #define max(a,b) ((a)>(b)?(a):(b))
 
+#define PHRED_MAX 64
+//#define PHRED_SHIFT (LOG(PHRED_MAX)/LOG(2.0))
+#define PHRED_SHIFT 6
+
 /*
  * Inverse poisson CDF, stolen from bwa: bwtaln.c
  */
@@ -151,6 +155,9 @@ find_hp_adapter(const char *s1, size_t len1,
 	}
 }
 
+/*
+ * Covert PHRED scaled Q value to a probability.
+ */
 static inline double
 q2p(int q)
 {
@@ -180,34 +187,21 @@ static uint _n2i[] = {['A']=0, ['C']=1, ['G']=2, ['T']=3};
  * described in Renaud et al. 2014, with minor modifications to
  * allow bisulfite converted base pairs.
  */
-static int
-match1bp(char c1, char c2, char q1, char q2,
+static void
+match1bp_slow(char c1, char c2, char q1, char q2,
 		char *c_out, char *q_out,
-		int allow_bs,
-		int phred_scale_in, int phred_scale_out)
+		int allow_bs)
 {
 	double p[4], p1[4], p2[4];
 	uint q[4], q_max;
 	double p_sum;
-	int ret;
 	int i, i_max;
 	int n_maxs;
 
-	c1 = toupper(c1);
-	c2 = toupper(c2);
-	q1 = q1 -phred_scale_in;
-	q2 = q2 -phred_scale_in;
-
-	if (c1 == 'N' || c2 == 'N') {
-		*c_out = c1 == 'N' ? c2 : c1;
-		*q_out = (c1 == 'N' ? q2 : q1);
-		if (*c_out == 'N')
-			ret = -1;
-		else
-			ret = 1;
-		goto done;
-	}
-
+	/*
+	 * Pr(nt | N_obs=c1, Q_obs=q1)
+	 *   Probability of nt given one stranded observation.
+	 */
 	p1[n2i('A')] = c1=='A'? 1-q2p(q1) : q2p(q1)/3;
 	p1[n2i('C')] = c1=='C'? 1-q2p(q1) : q2p(q1)/3;
 	p1[n2i('G')] = c1=='G'? 1-q2p(q1) : q2p(q1)/3;
@@ -218,13 +212,23 @@ match1bp(char c1, char c2, char q1, char q2,
 	p2[n2i('G')] = c2=='G'? 1-q2p(q2) : q2p(q2)/3;
 	p2[n2i('T')] = c2=='T'? 1-q2p(q2) : q2p(q2)/3;
 
-	p[n2i('A')] = p1[n2i('A')] * p2[n2i('A')];
-	p[n2i('T')] = p1[n2i('T')] * p2[n2i('T')];
-
 	if (allow_bs) {
+		/*
+		 * Pr(nt | N_obs={n1,n2}, Q_obs={q1,q2}, bisulfite treated)
+		 *   Probability of nt given two stranded observation, and
+		 *   we can have differences caused by bisulfite treatement.
+		 */
+		p[n2i('A')] = p1[n2i('A')] * p2[n2i('A')];
+		p[n2i('T')] = p1[n2i('T')] * p2[n2i('T')];
 		p[n2i('C')] = 0.5*(p1[n2i('C')]+p1[n2i('T')]) * p2[n2i('C')];
 		p[n2i('G')] = p1[n2i('G')] * 0.5*(p2[n2i('G')]+p2[n2i('A')]);
 	} else {
+		/*
+		 * Pr(nt | N_obs={n1,n2}, Q_obs={q1,q2})
+		 *   Probability of nt given two stranded observation.
+		 */
+		p[n2i('A')] = p1[n2i('A')] * p2[n2i('A')];
+		p[n2i('T')] = p1[n2i('T')] * p2[n2i('T')];
 		p[n2i('C')] = p1[n2i('C')] * p2[n2i('C')];
 		p[n2i('G')] = p1[n2i('G')] * p2[n2i('G')];
 	}
@@ -253,47 +257,76 @@ match1bp(char c1, char c2, char q1, char q2,
 	if (n_maxs > 1) {
 		*c_out = 'N';
 		*q_out = 0;
-		ret = -1;
-		goto done;
+	} else {
+		*c_out = "ACGT"[i_max];
+		*q_out = q[i_max];
 	}
-
-	*c_out = "ACGT"[i_max];
-	*q_out = q[i_max];
 
 	if (allow_bs) {
 		// check if methylated
-		if (i_max == n2i('C')) {
+		if (*c_out == 'C') {
 			if (p1[n2i('C')] > p1[n2i('T')])
 				*c_out = 'c';
-		} else if (i_max == n2i('G')) {
+		} else if (*c_out == 'G') {
 			if (p2[n2i('G')] > p2[n2i('A')])
 				*c_out = 'g';
 		}
 	}
+}
 
-	if (c1 == c2) {
-		ret = 0;
-	} else if (allow_bs && ((c1 == 'T' && c2 == 'C') || (c1 == 'G' && c2 == 'A'))) {
-		// bisulfite converted.
-		ret = 0;
-	} else {
-		ret = 1;
+static char _nt_MAP_n1n2q1q2[PHRED_MAX*PHRED_MAX*4*4];
+static char _nt_MAP_n1n2q1q2bs[PHRED_MAX*PHRED_MAX*4*4];
+static char _Q_MAP_n1n2q1q2[PHRED_MAX*PHRED_MAX*4*4];
+static char _Q_MAP_n1n2q1q2bs[PHRED_MAX*PHRED_MAX*4*4];
+
+/*
+ * Cache the most probable nucleotide, and its Q value, for all possible
+ * two stranded observations.
+ */
+static void
+init_match1bp_cache()
+{
+	int n1, n2, q1, q2;
+	int x;
+	char c, q;
+
+	for (q1=0; q1<PHRED_MAX; q1++) {
+		for (q2=0; q2<PHRED_MAX; q2++) {
+			for (n1=0; n1<4; n1++) {
+				for (n2=0; n2<4; n2++) {
+					x = q1<<(PHRED_SHIFT+2+2) | q2<<(2+2) | n1<<(2) | n2;
+
+					// no bs
+					match1bp_slow("ACGT"[n1], "ACGT"[n2], q1, q2, &c, &q, 0);
+					_nt_MAP_n1n2q1q2[x] = c;
+					_Q_MAP_n1n2q1q2[x] = q;
+
+					// bs
+					match1bp_slow("ACGT"[n1], "ACGT"[n2], q1, q2, &c, &q, 1);
+					_nt_MAP_n1n2q1q2bs[x] = c;
+					_Q_MAP_n1n2q1q2bs[x] = q;
+				}
+			}
+		}
 	}
-done:
-	*q_out += phred_scale_out;
-	return ret;
 }
 
 /*
- * Match a single base pair, naiively.
+ * Match a single base pair.
  */
-static int
-match1bp_naiive(char c1, char c2, char q1, char q2,
+static void
+match1bp(char c1, char c2, char q1, char q2,
 		char *c_out, char *q_out,
 		int allow_bs,
 		int phred_scale_in, int phred_scale_out)
 {
-	int ret;
+	int x;
+	static int cached_inited = 0;
+
+	if (!cached_inited) {
+		init_match1bp_cache();
+		cached_inited = 1;
+	}
 
 	c1 = toupper(c1);
 	c2 = toupper(c2);
@@ -302,39 +335,21 @@ match1bp_naiive(char c1, char c2, char q1, char q2,
 
 	if (c1 == 'N' || c2 == 'N') {
 		*c_out = c1 == 'N' ? c2 : c1;
-		*q_out = (c1 == 'N' ? q2 : q1);
+		*q_out = c1 == 'N' ? q2 : q1;
 		if (*c_out == 'N')
-			ret = -1;
-		else
-			ret = 1;
-	} else if (c1 == c2) {
-		if (allow_bs && (c1 == 'C' || c1 == 'G'))
-			// Unconverted C<->G.
-			c1 = tolower(c1);
-		*c_out = c1;
-		*q_out = min(q1+q2, 40);
-		ret = 0;
-	} else if (allow_bs && ((c1 == 'T' && c2 == 'C') || (c1 == 'G' && c2 == 'A'))) {
-		// bisulfite converted.
-		*c_out = c2 == 'C' ? 'C' : 'G';
-		*q_out = min(q1+q2, 40);
-		ret = 0;
-	} else {
-		if (q1 > q2) {
-			*c_out = c1;
-			*q_out = q1-q2;
-		} else if (q2 > q1) {
-			*c_out = c2;
-			*q_out = q2-q1;
-		} else {
-			*c_out = 'N';
 			*q_out = 0;
+	} else {
+		x = q1<<(PHRED_SHIFT+2+2) | q2<<(2+2) | n2i(c1)<<(2) | n2i(c2);
+		if (allow_bs) {
+			*c_out = _nt_MAP_n1n2q1q2bs[x];
+			*q_out = _Q_MAP_n1n2q1q2bs[x];
+		} else {
+			*c_out = _nt_MAP_n1n2q1q2[x];
+			*q_out = _Q_MAP_n1n2q1q2[x];
 		}
-		ret = 1;
 	}
 
 	*q_out += phred_scale_out;
-	return ret;
 }
 
 int
@@ -345,35 +360,21 @@ match2(const char *s1, const char *q1, size_t len1,
 	int phred_scale_in, int phred_scale_out)
 {
 	int i;
-	int mm = 0;
-	int n_count = 0;
 	int len = min(len1, len2);
 
+	// expected number of mismatches
+	double sum_p = 0;
+
 	for (i=0; i<len; i++) {
-		int m = match1bp_naiive(s1[i], s2[i], q1[i], q2[i],
+		match1bp(s1[i], s2[i], q1[i], q2[i],
 				s_out+i, q_out+i,
 				allow_bs,
 				phred_scale_in, phred_scale_out);
-		switch (m) {
-			case -1:
-				n_count++;
-				break;
-			case 0:
-				break;
-			case 1:
-				mm++;
-				break;
-		}
+
+		sum_p += q2p(q_out[i]-phred_scale_out);
 	}
 
-	// add length mismatch
-	//mm += abs(len1-len2);
-
-	if (3*n_count > len)
-		// I don't trust this pair of reads
-		mm += n_count;
-
-	return mm;
+	return (int)round(sum_p);
 }
 
 /*
@@ -442,6 +443,28 @@ match4(const char *_s1, const char *_q1, size_t len1,
 			s2, q2, len2,
 			s_out, q_out,
 			1, phred_scale_in, phred_scale_out);
+
+	/*{
+		int i;
+		for (i=0; i<len1; i++)
+			putchar(s1[i]);
+		printf("\n");
+		for (i=0; i<len2; i++)
+			putchar(s2[i]);
+		printf("\n+\n");
+		for (i=0; i<len1; i++)
+			putchar(q1[i]);
+		printf("\n");
+		for (i=0; i<len2; i++)
+			putchar(q2[i]);
+		printf("\n+\n");
+		for (i=0; i<min(len1, len2); i++)
+			putchar(s_out[i]);
+		printf("\n");
+		for (i=0; i<min(len1, len2); i++)
+			putchar(q_out[i]);
+		printf("\nmm=%d\n\n", mm);
+	}*/
 
 	free(mem);
 
