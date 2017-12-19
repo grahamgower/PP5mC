@@ -9,7 +9,7 @@ try:
 except NameError:
     pass
 
-def label2ssqq(label):
+def comment2ssqq(label):
     for field in label.split():
         if field.startswith("XF:Z:"):
             field = field[5:]
@@ -26,6 +26,7 @@ def parse_fq(filename):
 
     state = 0
     label = None
+    comment = None
     qual = None
 
     if filename.endswith(".gz"):
@@ -43,9 +44,14 @@ def parse_fq(filename):
             # fastq
             if line[0] == "@":
                 if label is not None:
-                    yield label, "".join(seq), "".join(qual)
+                    yield label, comment, "".join(seq), "".join(qual)
                 state = 1
-                label = line
+                lfields = line.split(None, 1)
+                label = lfields[0]
+                if len(lfields) > 1:
+                    comment = lfields[1]
+                else:
+                    comment = None
                 seq = []
                 qual = []
                 continue
@@ -59,7 +65,7 @@ def parse_fq(filename):
                 qual.append(line)
 
     if label is not None:
-        yield label, "".join(seq), "".join(qual)
+        yield label, comment, "".join(seq), "".join(qual)
 
 def mmfind(needle, haystack, mm_allow=2):
     nlen = len(needle)
@@ -74,19 +80,30 @@ def mmfind(needle, haystack, mm_allow=2):
             return i
     return -1
 
+def revcomp(seq):
+    """
+    Reverse complement of sequence @seq.
+    """
+    revmap = {"A":"T", "C":"G", "G":"C", "T":"A", "N":"N"}
+    return "".join((revmap[s] for s in reversed(seq)))
+
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("usage: {} r1.fq r2.fq".format(sys.argv[0]), file=sys.stderr)
+    if len(sys.argv) < 2:
+        print("usage: {} folded.fq [hairpin]".format(sys.argv[0]), file=sys.stderr)
         exit(1)
 
-    fn1 = sys.argv[1]
-    fn2 = sys.argv[2]
+    folded_fn = sys.argv[1]
 
-    hairpin = "ACGCCGGCGGCAAGTGAAGCCGCCGGCGT"
-    rhairpin = "ACGCCGGCGGCTTCACTTGCCGCCGGCGT"
+    if len(sys.argv) == 3:
+        hairpin = sys.argv[2]
+    else:
+        hairpin = "ACGCCGGCGGCAAGTGAAGCCGCCGGCGT"
 
-    p5 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC"
-    p7 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTA"
+#    p5 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC"
+#    p7 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTA"
+    p5 = p7 = "AGATCGGAAGAGC"
+
+    rhairpin = revcomp(hairpin)
 
     print("""
 <!DOCTYPE html>
@@ -109,21 +126,35 @@ if __name__ == "__main__":
         else:
             return "<font class={}>{}</font>".format(cls, s)
 
-    fq1 = parse_fq(fn1)
-    fq2 = parse_fq(fn2)
+    def g(slist):
+        sl = []
+        out = []
+        last = None
+        for s, cls in slist:
+            if cls != last and len(sl) != 0:
+                out.append(f("".join(sl), last))
+                last = cls
+                sl = []
+            sl.append(s)
+        if len(sl) != 0:
+            out.append(f("".join(sl), last))
+        return "".join(out)
 
-    while True:
-    #for i in range(1000):
-        try:
-            _, ss1, qq1 = next(fq1)
-            _, ss2, qq2 = next(fq2)
-        except StopIteration:
+    for seqno, (label, comment, ss, qq) in enumerate(parse_fq(folded_fn), 1):
+
+        if seqno > 1000:
             break
 
-        hpi = mmfind(hairpin,ss1)
-        rhpi = mmfind(rhairpin,ss2)
-        p5i = mmfind(p5,ss1)
-        p7i = mmfind(p7,ss2)
+        ss1, ss2, qq1, qq2 = comment2ssqq(comment)
+
+        hpi = rhpi = len(ss)
+        p5i = p7i = 2*len(ss)+len(hairpin)
+
+        if p5i > len(ss1):
+            p5i = mmfind(p5,ss1)
+        if p7i > len(ss1):
+            p7i = mmfind(p7,ss2)
+
         s1_list = []
         s2_list = []
 
@@ -152,13 +183,15 @@ if __name__ == "__main__":
                 s1_cls = "yadapter"
             if p7i != -1 and i>=p7i:
                 s2_cls = "yadapter"
-            s1_list.append(f(s1, s1_cls))
-            s2_list.append(f(s2, s2_cls))
-        print("".join(s1_list))
+            s1_list.append((s1, s1_cls))
+            s2_list.append((s2, s2_cls))
+        print("R1", g(s1_list))
         print("</br>")
-        print("".join(s2_list))
-        #print("</br>")
-        #print(seq)
+        print("R2", g(s2_list))
+        print("</br>")
+        print("FS ", ss)
+        print("</br>")
+        print("FQ ", qq)
         print("</tt></p>")
 
     print("</h2></html></body>")
