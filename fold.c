@@ -28,9 +28,9 @@ static char cmap[] = {['A']='T', ['C']='G', ['G']='C', ['T']='A', ['N']='N', ['n
 #define min(a,b) ((a)<(b)?(a):(b))
 #define max(a,b) ((a)>(b)?(a):(b))
 
-#define PHRED_MAX 64
-//#define PHRED_SHIFT (LOG(PHRED_MAX)/LOG(2.0))
-#define PHRED_SHIFT 6
+static uint _n2i[] = {['A']=0, ['C']=1, ['G']=2, ['T']=3, ['N']=4};
+#define n2i(nt) _n2i[(uint)nt]
+
 
 /*
  * Inverse poisson CDF, stolen from bwa: bwtaln.c
@@ -101,60 +101,6 @@ reverse(char *s, size_t len)
 	}
 }
 
-/* 
- * Compare len bytes of s1 and s2, allowing mismatches.
- * Return 0 for a match, -1 otherwise.
- */
-static int
-mmcmp(const char *s1, const char *s2, size_t len)
-{
-	int i, mm;
-
-	mm = maxdiff(len, AVG_ERR, MAXDIFF_THRES);
-
-	for (i=0; i<len; i++) {
-		mm -= (s1[i] != s2[i]);
-		if (mm < 0)
-			return -1;
-	}
-
-	return 0;
-}
-
-/*
- * Search s1 and s2 for hairpin sequences.
- */
-void
-find_hp_adapter(const char *s1, size_t len1,
-		const char *s2, size_t len2,
-		const char *hairpin, const char *rhairpin,
-		size_t hlen,
-		int *h1, int *h2)
-{
-	int i;
-
-	*h1 = 0;
-	*h2 = 0;
-
-	for (i=0; i<len1; i++) {
-		if (!mmcmp(s1+i, hairpin, min(len1-i, hlen))) {
-			*h1 = i;
-			if (!mmcmp(s2+i, rhairpin, min(len2-i, hlen)))
-				*h2 = i;
-			break;
-		}
-	}
-
-	if (!*h2) {
-		for (i=0; i<len2; i++) {
-			if (!mmcmp(s2+i, rhairpin, min(len2-i, hlen))) {
-				*h2 = i;
-				break;
-			}
-		}
-	}
-}
-
 /*
  * Covert PHRED scaled Q value to a probability.
  */
@@ -179,7 +125,6 @@ q2p(int q)
 	return q2p_cache[q];
 }
 
-#define Q_MAX 40
 static inline int
 p2q(double p)
 {
@@ -191,21 +136,106 @@ p2q(double p)
 	return q;
 }
 
+/* 
+ * Compare len bytes of s1 and s2, allowing mismatches.
+ * Return summed mismatch probabilities, or -1 if Ns of the same length do
+ * better.
+ */
+static double
+mmcmp(const char *s, const char *q, const double *pv, size_t len)
+{
+	int i;
+	double mm;
+
+	// must do better than a string of Ns
+	mm = (q2p(2)/3) * len;
+
+	for (i=0; i<len; i++) {
+		int x = i<<(PHRED_SHIFT+3) | q[i]<<(3) | n2i(s[i]);
+		mm -= pv[x];
+		if (mm < 0)
+			return -1;
+	}
+
+	return mm;
+}
+
+void
+str2pvec(const char *s, size_t len, double **pv)
+{
+	int i, x;
+	int q, n;
+
+	*pv = calloc(len*PHRED_MAX*8, sizeof(double));
+	if (*pv == NULL) {
+		perror("calloc");
+		return;
+	}
+
+	for (i=0; i<len; i++) {
+		for (q=0; q<PHRED_MAX; q++) {
+			for (n=0; n<8; n++) {
+				x = i<<(PHRED_SHIFT+3) | q<<(3) | n;
+
+				if (s[i] == 'N')
+					(*pv)[x] = 0.75;
+				else if (n != n2i(s[i]))
+					(*pv)[x] = 1-q2p(q);
+				else
+					(*pv)[x] = q2p(q)/3;
+			}
+		}
+	}
+}
+
+/*
+ * Search s1 and s2 for adapter sequences.
+ */
+void
+find_adapters(const char *s1, const char *q1, size_t len1,
+		const char *s2, const char *q2, size_t len2,
+		const double *pv1, size_t pv1_len,
+		const double *pv2, size_t pv2_len,
+		int *h1, int *h2)
+{
+	int i;
+	double mm1, mm2;
+	double mm1_max = -1, mm2_max = -1;
+
+	*h1 = len1;
+	*h2 = len2;
+
+	for (i=0; i<len1; i++) {
+		if ((mm1=mmcmp(s1+i, q1+i, pv1, min(len1-i, pv1_len))) > 0) {
+			if (mm1 > mm1_max) {
+				mm1_max = mm1;
+				*h1 = i;
+			}
+		}
+	}
+
+	for (i=0; i<len2; i++) {
+		if ((mm2=mmcmp(s2+i, q2+i, pv2, min(len2-i, pv2_len))) > 0) {
+			if (mm2 > mm2_max) {
+				mm2_max = mm2;
+				*h2 = i;
+			}
+		}
+	}
+}
+
 /*
  * Expected number of wrong bases.
  */
-int
-posterior_error(const char *qvec, int len, int phred_scale_in)
+double
+posterior_error(const char *qvec, int len)
 {
 	int i;
 	double sum_p = 0;
 	for (i=0; i<len; i++)
-		sum_p += q2p(qvec[i]-phred_scale_in);
-	return round(sum_p);
+		sum_p += q2p(qvec[i]);
+	return sum_p;
 }
-
-static uint _n2i[] = {['A']=0, ['C']=1, ['G']=2, ['T']=3};
-#define n2i(nt) _n2i[(uint)nt]
 
 /*
  * Match a single base pair using posterior base probability as
@@ -342,8 +372,7 @@ init_match1bp_cache()
 static void
 match1bp(char c1, char c2, char q1, char q2,
 		char *c_out, char *q_out,
-		int allow_bs,
-		int phred_scale_in, int phred_scale_out)
+		int allow_bs)
 {
 	int x;
 	static int cached_inited = 0;
@@ -355,14 +384,64 @@ match1bp(char c1, char c2, char q1, char q2,
 
 	c1 = toupper(c1);
 	c2 = toupper(c2);
-	q1 = q1 -phred_scale_in;
-	q2 = q2 -phred_scale_in;
 
 	if (c1 == 'N' || c2 == 'N') {
-		*c_out = c1 == 'N' ? c2 : c1;
-		*q_out = c1 == 'N' ? q2 : q1;
+		if (allow_bs) {
+			// not much can be said with confidence from a
+			// single stranded observation
+
+			switch (c1) {
+				case 'A':
+					// have an A
+					*c_out = c1;
+					*q_out = q1;
+					break;
+				case 'C':
+					// must be 5mC
+					*c_out = 'c';
+					*q_out = q1;
+					break;
+				case 'G':
+					// might have C or 5mC on other strand
+					*c_out = 'N';
+					break;
+				case 'T':
+					// might have a T or C
+					*c_out = 'N';
+					break;
+			}
+			switch (c2) {
+				case 'A':
+					// might be an A or a G
+					*c_out = 'N';
+					break;
+				case 'C':
+					// might be C or 5mC
+					*c_out = 'N';
+					break;
+				case 'G':
+					// must have 5mC on other strand
+					*c_out = 'g';
+					*q_out = q2;
+					break;
+				case 'T':
+					// have a T
+					*c_out = c2;
+					*q_out = q2;
+					break;
+			}
+
+			if (c1 == 'N' && c2 == 'N')
+				*c_out = 'N';
+
+		} else {
+			*c_out = c1 == 'N' ? c2 : c1;
+			*q_out = c1 == 'N' ? q2 : q1;
+		}
+
 		if (*c_out == 'N')
 			*q_out = 0;
+
 	} else {
 		x = q1<<(PHRED_SHIFT+2+2) | q2<<(2+2) | n2i(c1)<<(2) | n2i(c2);
 		if (allow_bs) {
@@ -373,16 +452,13 @@ match1bp(char c1, char c2, char q1, char q2,
 			*q_out = _Q_MAP_n1n2q1q2[x];
 		}
 	}
-
-	*q_out += phred_scale_out;
 }
 
 void
 match2(const char *s1, const char *q1, size_t len1,
 	const char *s2, const char *q2, size_t len2,
 	char *s_out, char *q_out,
-	int allow_bs,
-	int phred_scale_in, int phred_scale_out)
+	int allow_bs)
 {
 	int i;
 	int len = min(len1, len2);
@@ -390,8 +466,7 @@ match2(const char *s1, const char *q1, size_t len1,
 	for (i=0; i<len; i++) {
 		match1bp(s1[i], s2[i], q1[i], q2[i],
 				s_out+i, q_out+i,
-				allow_bs,
-				phred_scale_in, phred_scale_out);
+				allow_bs);
 	}
 }
 
@@ -410,8 +485,7 @@ match4(const char *_s1, const char *_q1, size_t len1,
 	const char *_s2, const char *_q2, size_t len2,
 	const char *_s3, const char *_q3, size_t len3,
 	const char *_s4, const char *_q4, size_t len4,
-	char *s_out, char *q_out,
-	int phred_scale_in, int phred_scale_out)
+	char *s_out, char *q_out)
 {
 	char *mem, *s1, *s2, *s3, *s4, *q1, *q2, *q3, *q4;
 
@@ -447,19 +521,19 @@ match4(const char *_s1, const char *_q1, size_t len1,
 	match2(s1+len1-len4, q1+len1-len4, len4,
 		s4, q4, len4,
 		s1+len1-len4, q1+len1-len4,
-		0, phred_scale_in, phred_scale_out);
+		0);
 
 	revcomp(s3, len3);
 	reverse(q3, len3);
 	match2(s2+len2-len3, q2+len2-len3, len3,
 		s3, q3, len3,
 		s2+len2-len3, q2+len2-len3,
-		0, phred_scale_in, phred_scale_out);
+		0);
 
 	match2(s1, q1, len1,
 			s2, q2, len2,
 			s_out, q_out,
-			1, phred_scale_in, phred_scale_out);
+			1);
 
 	/*{
 		int i;
@@ -493,28 +567,28 @@ match4(const char *_s1, const char *_q1, size_t len1,
 int
 correct_s1s2(char *s1, char *q1, size_t len1,
 		char *s2, char *q2, size_t len2,
-		const char *hairpin, const char *rhairpin, size_t hlen,
-		int phred_scale_in, int phred_scale_out)
+		const double *pv1, size_t pv1_len,
+		const double *pv2, size_t pv2_len)
 {
 	int h1, h2;
 
-	find_hp_adapter(s1, len1, s2, len2,
-			hairpin, rhairpin, hlen,
+	find_adapters(s1, q1, len1, s2, q2, len2,
+			pv1, pv1_len, pv2, pv2_len,
 			&h1, &h2);
 
 	if (h1 != 0 && h2 != 0 && h1 != h2)
 		// dislocated hairpins
 		return -1;
 
-	if (h1+hlen < len1 && h2+hlen < len2) {
+	if (h1+pv1_len < len1 && h2+pv2_len < len2) {
 		// short molecule, there are valid bases after the hairpin
-		char *s3 = s1 + h1 + hlen;
-		char *q3 = q1 + h1 + hlen;
-		char *s4 = s2 + h2 + hlen;
-		char *q4 = q2 + h2 + hlen;
+		char *s3 = s1 + h1 + pv1_len;
+		char *q3 = q1 + h1 + pv1_len;
+		char *s4 = s2 + h2 + pv2_len;
+		char *q4 = q2 + h2 + pv2_len;
 
-		int len3 = 2*h1+hlen > len1 ? len1 - h1 - hlen : h1;
-		int len4 = 2*h2+hlen > len2 ? len2 - h2 - hlen : h2;
+		int len3 = 2*h1+pv1_len > len1 ? len1 - h1 - pv1_len : h1;
+		int len4 = 2*h2+pv2_len > len2 ? len2 - h2 - pv2_len : h2;
 		int len1 = h1;
 		int len2 = h2;
 
@@ -526,14 +600,14 @@ correct_s1s2(char *s1, char *q1, size_t len1,
 		match2(s1+len1-len4, q1+len1-len4, len4,
 			s4, q4, len4,
 			s1+len1-len4, q1+len1-len4,
-			0, phred_scale_in, phred_scale_out);
+			0);
 
 		revcomp(s3, len3);
 		reverse(q3, len3);
 		match2(s2+len2-len3, q2+len2-len3, len3,
 			s3, q3, len3,
 			s2+len2-len3, q2+len2-len3,
-			0, phred_scale_in, phred_scale_out);
+			0);
 	}
 
 	return 0;
@@ -563,4 +637,29 @@ xf2ssqq(char *xf, char **s1, char **s2, char **q1, char **q2)
 	*q2 = xf+3*(len+1);
 
 	return len;
+}
+
+/*
+ * Convert ASCII value to phred scaled Q score.
+ */
+void
+clean_quals(const char *s, char *q, size_t len, int phred_scale_in)
+{
+	int i;
+
+	for (i=0; i<len; i++) {
+		char *qi = q+i;
+
+		/*
+		if (s[i] == 'N') {
+			*qi = 0;
+			continue;
+		}*/
+
+		*qi -= phred_scale_in;
+		if (*q < 2)
+			*q = 2;
+		if (*q >= PHRED_MAX)
+			*q = PHRED_MAX-1;
+	}
 }

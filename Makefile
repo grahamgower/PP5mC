@@ -5,7 +5,7 @@ LIBS= #-Wl,-Bstatic -lhts -lz -Wl,-Bdynamic -lm
 
 all: foldreads mark_5mC scan_pairs
 
-foldreads: foldreads.o fold.o
+foldreads: foldreads.o fold.o fit_lognorm.o kmath.o
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS) -Wl,-Bstatic -lz -Wl,-Bdynamic -lm
 
 mark_5mC: mark_5mC.o fold.o

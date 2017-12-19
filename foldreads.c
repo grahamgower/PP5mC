@@ -31,18 +31,34 @@ KSEQ_INIT(gzFile, gzread);
 
 #include "fold.h"
 
+#define FOLDREADS_VERSION "10"
+
 #define min(a,b) ((a)<(b)?(a):(b))
 #define max(a,b) ((a)>(b)?(a):(b))
 
+int fit_lognorm(const uint64_t *hist, int len, uint64_t area, double *mu, double *sigma);
+
+struct adapter {
+	char *s;
+	size_t l;
+	double *pv;
+};
+
+struct hairpin {
+	struct adapter *fwd, *rev;
+	struct hairpin *next;
+};
+
 typedef struct {
-	char *hairpin, *rhairpin; // Hairpin sequence, reverse complement.
-	size_t hlen; // Hairpin length.
 	char *fn1, *fn2; // Input filenames.
 	char *metrics_fn;
 	FILE *fos; // File pointer for outputting sequences.
 	FILE *f_unmatched_r1, *f_unmatched_r2; // File pointers for unfolded reads
 	int phred_scale_in, phred_scale_out;
 	size_t adapter_matchlen;
+
+	struct hairpin *hp_head;
+	struct adapter *a1, *a2;
 } opt_t;
 
 typedef struct {
@@ -50,12 +66,16 @@ typedef struct {
 	uint64_t folded;
 	uint64_t hairpin_complete;
 	uint64_t hairpin_dislocated;
+
+	// fragment length histogram
+	uint64_t *fl_hist;
+	size_t fl_hist_len;
 } metrics_t;
 
 /*
  * Fold the input sequences, s1 and s2.
  * Folded sequence is placed in s_out, folded quality scores placed in q_out.
- * Returns 1 if folding was successful, 0 otherwise.
+ * Returns sequence length if folding was successful, 0 otherwise.
  */
 int
 fold(const opt_t *opt, metrics_t *metrics,
@@ -63,8 +83,9 @@ fold(const opt_t *opt, metrics_t *metrics,
 		const char *s2, const char *q2, size_t len2,
 		char **_s_out, char **_q_out)
 {
+	struct hairpin *h;
 	char *s_out, *q_out;
-	int mm;
+	double mm;
 
 	// hairpin indices
 	int h1, h2;
@@ -72,10 +93,6 @@ fold(const opt_t *opt, metrics_t *metrics,
 	if (len1 != len2) {
 		fprintf(stderr, "Error: input r1/r2 reads have different lengths.\n");
 		exit(1);
-		/*
-		*_s_out = *_q_out = NULL;
-		return 0;
-		*/
 	}
 
 	s_out = malloc(len1+1);
@@ -86,9 +103,13 @@ fold(const opt_t *opt, metrics_t *metrics,
 		exit(-2);
 	}
 
-	find_hp_adapter(s1, len1, s2, len2,
-			opt->hairpin, opt->rhairpin, opt->hlen,
-			&h1, &h2);
+	h = opt->hp_head;
+
+next_hairpin:
+	// look for hairpin
+	find_adapters(s1, q1, len1, s2, q2, len2,
+			h->fwd->pv, h->fwd->l,
+			h->rev->pv, h->rev->l, &h1, &h2);
 
 	if (h1 && h2) {
 		if (h1 != h2 && h1 < len1-opt->adapter_matchlen && h2 < len2-opt->adapter_matchlen) {
@@ -98,24 +119,38 @@ fold(const opt_t *opt, metrics_t *metrics,
 			goto discard_reads;
 		}
 	}
-	if (h1 && !h2)
-		h2 = h1;
-	if (h2 && !h1)
-		h1 = h2;
+	if (h1 != h2)
+		goto discard_reads;
 
-	h1 = h2 = min(h1, h2);
-
-	if (h1+opt->hlen <= len1)// && h2+opt->hlen <= len2)
+	if (h1+h->fwd->l <= len1)// && h2+h->rev->l <= len2)
 		metrics->hairpin_complete++;
 
-	if (h1+opt->hlen < len1) {// && h2+opt->hlen < len2) {
+	if (h1+opt->adapter_matchlen > len1) {
+		if (h->next != NULL) {
+			h = h->next;
+			goto next_hairpin;
+		} else {
+			/*
+			 * No hairpin sequences found, so look for trailing
+			 * adapters.  If found, this means the molecule lacks
+			 * a hairpin and should be distrusted.
+			 */
+			find_adapters(s1, q1, len1, s2, q2, len2,
+					opt->a1->pv, opt->a1->l,
+					opt->a2->pv, opt->a2->l, &h1, &h2);
+			if (h1+opt->adapter_matchlen < len1 || h2+opt->adapter_matchlen < len2)
+				goto discard_reads;
+		}
+	}
+
+	if (h1+h->fwd->l < len1) {// && h2+h->rev->l < len2) {
 		// short molecule, there are valid bases after the hairpin
-		const char *s3 = s1 + h1 + opt->hlen;
-		const char *q3 = q1 + h1 + opt->hlen;
-		const char *s4 = s2 + h2 + opt->hlen;
-		const char *q4 = q2 + h2 + opt->hlen;
-		int len3 = 2*h1+opt->hlen > len1 ? len1 - h1 - opt->hlen : h1;
-		int len4 = 2*h2+opt->hlen > len2 ? len2 - h2 - opt->hlen : h2;
+		const char *s3 = s1 + h1 + h->fwd->l;
+		const char *q3 = q1 + h1 + h->fwd->l;
+		const char *s4 = s2 + h2 + h->fwd->l;
+		const char *q4 = q2 + h2 + h->fwd->l;
+		int len3 = 2*h1+h->fwd->l > len1 ? len1 - h1 - h->fwd->l : h1;
+		int len4 = 2*h2+h->rev->l > len2 ? len2 - h2 - h->rev->l : h2;
 
 		len1 = h1;
 		len2 = h2;
@@ -124,9 +159,7 @@ fold(const opt_t *opt, metrics_t *metrics,
 				s2, q2, len2,
 				s3, q3, len3,
 				s4, q4, len4,
-				s_out, q_out,
-				opt->phred_scale_in,
-				opt->phred_scale_out);
+				s_out, q_out);
 	} else {
 		// long molecule, just match up to the hairpin
 		len1 = h1;
@@ -134,21 +167,21 @@ fold(const opt_t *opt, metrics_t *metrics,
 		match2(s1, q1, len1,
 				s2, q2, len2,
 				s_out, q_out,
-				1,
-				opt->phred_scale_in,
-				opt->phred_scale_out);
+				1);
 	}
 
-	s_out[min(len1,len2)] = '\0';
-	q_out[min(len1,len2)] = '\0';
+	size_t len = min(len1, len2);
 
-	mm = posterior_error(q_out, min(len1,len2), opt->phred_scale_out);
+	s_out[len] = '\0';
+	q_out[len] = '\0';
 
-	if (mm <= maxdiff(len1+len2, AVG_ERR, MAXDIFF_THRES)) {
+	mm = posterior_error(q_out, len);
+
+	if (mm < maxdiff(len, AVG_ERR, MAXDIFF_THRES)) {
 		metrics->folded++;
 		*_s_out = s_out;
 		*_q_out = q_out;
-		return 1;
+		return len;
 	} else {
 discard_reads:
 		free(s_out);
@@ -159,15 +192,14 @@ discard_reads:
 }
 
 /*
- * Write out a single fastq entry.
+ * Convert phred scaled Q score to ASCII and print to file.
  */
 void
-seq_write(const char *name, const char *comment, const char *seq, const char *qual, FILE *fs)
+fput_qual(FILE *fp, int phred_scale_out, const char *q, size_t len)
 {
-	if (comment)
-		fprintf(fs, "@%s %s\n%s\n+\n%s\n", name, comment, seq, qual);
-	else
-		fprintf(fs, "@%s\n%s\n+\n%s\n", name, seq, qual);
+	int i;
+	for (i=0; i<len; i++)
+		fputc(q[i]+phred_scale_out, fp);
 }
 
 /*
@@ -178,7 +210,7 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 	gzFile fp1, fp2;
 	kseq_t *seq1, *seq2;
 	int len1, len2;
-	int ret, f;
+	int ret, fraglen;
 	char *s_out, *q_out;
 
 	fp1 = gzopen(opt->fn1, "r");
@@ -223,8 +255,8 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 
 		metrics->total_reads++;
 
-		if (len1 < opt->hlen || len2 < opt->hlen)
-			continue;
+		//if (len1 < opt->hlen || len2 < opt->hlen)
+		//	continue;
 
 		if (seq1->qual.l == 0) {
 			fprintf(stderr, "%s: qual scores required.\n", opt->fn1);
@@ -238,34 +270,69 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 			goto err3;
 		}
 
-		f = fold(opt, metrics, seq1->seq.s, seq1->qual.s, seq1->seq.l,
+		if (metrics->fl_hist == NULL) {
+			metrics->fl_hist_len = len1+1;
+			metrics->fl_hist = calloc(metrics->fl_hist_len,
+						sizeof(*metrics->fl_hist));
+			if (metrics->fl_hist == NULL) {
+				perror("malloc");
+				ret = -5;
+				goto err3;
+			}
+		} else if (metrics->fl_hist_len != len1+1) {
+			fprintf(stderr, "Reads have different length to previous reads: %s\n",
+					seq1->name.s);
+			ret = -7;
+			goto err3;
+		}
+
+		clean_quals(seq1->seq.s, seq1->qual.s, seq1->seq.l, opt->phred_scale_in);
+		clean_quals(seq2->seq.s, seq2->qual.s, seq2->seq.l, opt->phred_scale_in);
+
+		fraglen = fold(opt, metrics, seq1->seq.s, seq1->qual.s, seq1->seq.l,
 			seq2->seq.s, seq2->qual.s, seq2->seq.l, &s_out, &q_out);
-		if (f == 1) {
-			fprintf(opt->fos,
-					"@%s XF:Z:%s|%s|%s|%s\n%s\n+\n%s\n",
-					seq1->name.s,
-					seq1->seq.s, seq2->seq.s,
-					seq1->qual.s, seq2->qual.s,
-					s_out, q_out);
+		if (fraglen > 0) {
+			fprintf(opt->fos, "@%s XF:Z:%s|%s|", seq1->name.s, seq1->seq.s, seq2->seq.s);
+			fput_qual(opt->fos, opt->phred_scale_out, seq1->qual.s, seq1->qual.l);
+			fputc('|', opt->fos);
+			fput_qual(opt->fos, opt->phred_scale_out, seq2->qual.s, seq2->qual.l);
+			fprintf(opt->fos, "\n%s\n+\n", s_out);
+			fput_qual(opt->fos, opt->phred_scale_out, q_out, strlen(s_out));
+			fputc('\n', opt->fos);
+
 			free(s_out);
 			free(q_out);
+
+			fraglen = min(fraglen, len1);
+			metrics->fl_hist[fraglen]++;
+
 		} else if (opt->f_unmatched_r1) {
-			char *comment = seq1->comment.l==0 ? NULL : seq1->comment.s;
-			seq_write(seq1->name.s, comment, seq1->seq.s, seq1->qual.s, opt->f_unmatched_r1);
-			comment = seq2->comment.l==0 ? NULL : seq2->comment.s;
-			seq_write(seq2->name.s, comment, seq2->seq.s, seq2->qual.s, opt->f_unmatched_r2);
+
+			if (seq1->comment.l)
+				fprintf(opt->f_unmatched_r1, "@%s %s\n%s\n+\n", seq1->name.s, seq1->comment.s, seq1->seq.s);
+			else
+				fprintf(opt->f_unmatched_r1, "@%s\n%s\n+\n", seq1->name.s, seq1->seq.s);
+			fput_qual(opt->f_unmatched_r1, opt->phred_scale_out, seq1->qual.s, seq1->qual.l);
+			fputc('\n', opt->f_unmatched_r1);
+
+			if (seq2->comment.l)
+				fprintf(opt->f_unmatched_r2, "@%s %s\n%s\n+\n", seq2->name.s, seq2->comment.s, seq2->seq.s);
+			else
+				fprintf(opt->f_unmatched_r2, "@%s\n%s\n+\n", seq2->name.s, seq2->seq.s);
+			fput_qual(opt->f_unmatched_r2, opt->phred_scale_out, seq2->qual.s, seq2->qual.l);
+			fputc('\n', opt->f_unmatched_r2);
 		}
 	}
 
 	if (len1 != -1) {
 		fprintf(stderr, "%s: unexpected end of file.\n", opt->fn1);
-		ret = 5;
+		ret = -8;
 		goto err3;
 	}
 
 	if (len2 != -1) {
 		fprintf(stderr, "%s: unexpected end of file.\n", opt->fn2);
-		ret = 5;
+		ret = -8;
 		goto err3;
 	}
 
@@ -285,6 +352,7 @@ err0:
 void
 print_metrics(const opt_t *opt, const metrics_t *metrics)
 {
+	int i;
 	FILE *fp = stderr;
 
 	if (opt->metrics_fn) {
@@ -295,23 +363,151 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 		}
 	}
 
-	fprintf(fp, "Total read pairs: %jd\n", (uintmax_t)metrics->total_reads);
-	fprintf(fp, "Number of successfully folded read pairs: %jd (%lf)\n",
-			(uintmax_t)metrics->folded,
-			(double)metrics->folded/metrics->total_reads);
-	fprintf(fp, "Number of read pairs with complete hairpin: %jd\n",
-			(uintmax_t)metrics->hairpin_complete);
-	fprintf(fp, "Number of read pairs with dislocated hairpins: %jd\n",
-			(uintmax_t)metrics->hairpin_dislocated);
+	fprintf(fp, "# foldreads version\n");
+	fprintf(fp, "VV\t%s\n\n", FOLDREADS_VERSION);
+
+	fprintf(fp, "# Number of read pairs processed.\n");
+	fprintf(fp, "NR\t%jd\n\n", (uintmax_t)metrics->total_reads);
+
+	fprintf(fp, "# Number of read pairs successfully folded.\n");
+	fprintf(fp, "NF\t%jd\n\n", (uintmax_t)metrics->folded);
+
+	fprintf(fp, "# Number of read pairs with complete hairpin.\n");
+	fprintf(fp, "NH\t%jd\n\n", (uintmax_t)metrics->hairpin_complete);
+
+	fprintf(fp, "# Number of read pairs with dislocated hairpin.\n");
+	fprintf(fp, "ND\t%jd\n\n", (uintmax_t)metrics->hairpin_dislocated);
+
+
+	int histlen = metrics->fl_hist_len -1 -opt->adapter_matchlen;
+
+	double mu, sigma;
+	fit_lognorm(metrics->fl_hist, histlen, metrics->folded, &mu, &sigma);
+	fprintf(fp, "# Best fit LogNormal distribution for fragment lengths.\n");
+	fprintf(fp, "#LN\tmu\tsigma\n");
+	fprintf(fp, "LN\t%.3lf\t%.3lf\n\n", mu, sigma);
+
+	fprintf(fp, "# Fragment length counts.\n");
+	fprintf(fp, "# The last line is for fragments greater than or equal to that length.\n");
+	fprintf(fp, "#FL\tfraglen\tnseqs\n");
+	for (i=1; i<histlen; i++) {
+		fprintf(fp, "FL\t%d\t%jd\n",
+				i, (uintmax_t)metrics->fl_hist[i]);
+	}
+
+	uintmax_t longmol = 0;
+	for (; i<metrics->fl_hist_len; i++)
+		longmol += metrics->fl_hist[i];
+
+	fprintf(fp, "FL\t%d\t%jd\n",
+			histlen,
+			longmol);
+	//fprintf(fp, "\n");
+
+	free(metrics->fl_hist);
 
 	if (fp != stderr)
 		fclose(fp);
 }
 
+struct adapter *
+adapter_init(const char *s)
+{
+	struct adapter *a;
+	int i;
+
+	a = calloc(sizeof(*a), 1);
+	if (a == NULL) {
+		perror("adapter_init:calloc");
+		goto err0;
+	}
+
+	a->l = strlen(s);
+
+	a->s = malloc(a->l+1);
+	if (a->s == NULL) {
+		perror("adapter_init:malloc");
+		goto err1;
+	}
+
+	for (i=0; i<a->l; i++)
+		a->s[i] = toupper(s[i]);
+
+	a->s[a->l] = '\0';
+
+	str2pvec(a->s, a->l, &a->pv);
+	if (a->pv == NULL)
+		goto err2;
+
+	return a;
+//err3:
+//	free(a->pv);
+err2:
+	free(a->s);
+err1:
+	free(a);
+err0:
+	return NULL;
+}
+
+void
+adapter_free(struct adapter *a)
+{
+	if (a == NULL)
+		return;
+	free(a->pv);
+	free(a->s);
+	free(a);
+}
+
+struct hairpin *
+hairpin_init(const char *s)
+{
+	struct hairpin *h;
+	char *s_rev;
+
+	h = calloc(sizeof(*h), 1);
+	if (h == NULL) {
+		perror("hairpin_init:calloc");
+		goto err0;
+	}
+
+	h->fwd = adapter_init(s);
+	if (h->fwd == NULL)
+		goto err1;
+
+	s_rev = strdup(s);
+	revcomp(s_rev, h->fwd->l);
+
+	h->rev = adapter_init(s_rev);
+	if (h->fwd == NULL)
+		goto err2;
+
+	return h;
+//err3:
+//	adapter_free(h->rev);
+err2:
+	adapter_free(h->fwd);
+err1:
+	free(h);
+err0:
+	return NULL;
+}
+
+void
+hairpin_free(struct hairpin *h)
+{
+	if (h == NULL)
+		return;
+	adapter_free(h->rev);
+	adapter_free(h->fwd);
+	free(h);
+}
+
 void
 usage(char *argv0)
 {
-	fprintf(stderr, "foldreads v9\n");
+	fprintf(stderr, "foldreads v%s\n", FOLDREADS_VERSION);
 	fprintf(stderr, "usage: %s [...] -1 IN1.FQ -2 IN2.FQ\n", argv0);
 	fprintf(stderr, " -o OUT.FQ         Fastq output file [stdout]\n");
 	fprintf(stderr, " -m FILE           Metrics output file [stderr]\n");
@@ -319,6 +515,8 @@ usage(char *argv0)
 	fprintf(stderr, " -p SEQ            The hairpin SEQuence [ACGCCGGCGGCAAGTGAAGCCGCCGGCGT]\n");
 	fprintf(stderr, " -1 IN1.FQ[.GZ]    R1 fastq input file\n");
 	fprintf(stderr, " -2 IN2.FQ[.GZ]    R2 fastq input file\n");
+	fprintf(stderr, " -T SEQ            Adapter SEQuence trailing R1 (Top) []\n");
+	fprintf(stderr, " -B SEQ            Adapter SEQuence trailing R2 (Bottom) []\n");
 	exit(-1);
 }
 
@@ -327,10 +525,15 @@ main(int argc, char **argv)
 {
 	opt_t opt;
 	metrics_t metrics;
+	struct hairpin *h, *hp_last = NULL;
 	int c, ret;
-	int i;
 	char *unmatched_pfx = NULL;
 	char *fos_fn = NULL;
+	char *a1, *a2;
+
+	// Y-adapters
+	a1 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCACNNNNNNATCTCGTATGCCGTCTTCTGCTTG";
+	a2 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT";
 
 	memset(&opt, '\0', sizeof(opt_t));
 	memset(&metrics, '\0', sizeof(metrics_t));
@@ -338,9 +541,8 @@ main(int argc, char **argv)
 	opt.phred_scale_in = 33;
 	opt.phred_scale_out = 33;
 	opt.adapter_matchlen = 9;
-	opt.hairpin = "ACGCCGGCGGCAAGTGAAGCCGCCGGCGT";
 
-	while ((c = getopt(argc, argv, "o:m:p:u:1:2:")) != -1) {
+	while ((c = getopt(argc, argv, "o:m:p:u:1:2:T:B:")) != -1) {
 		switch (c) {
 			case 'o':
 				fos_fn = optarg;
@@ -349,9 +551,15 @@ main(int argc, char **argv)
 				opt.metrics_fn = optarg;
 				break;
 			case 'p':
-				opt.hairpin = optarg;
-				for (i=0; i<strlen(opt.hairpin); i++)
-					opt.hairpin[i] = toupper(opt.hairpin[i]);
+				h = hairpin_init(optarg);
+				if (h == NULL)
+					exit(1);
+				if (hp_last != NULL) {
+					hp_last->next = h;
+					hp_last = h;
+				} else {
+					opt.hp_head = hp_last = h;
+				}
 				break;
 			case 'u':
 				unmatched_pfx = optarg;
@@ -361,6 +569,12 @@ main(int argc, char **argv)
 				break;
 			case '2':
 				opt.fn2 = optarg;
+				break;
+			case 'T':
+				a1 = optarg;
+				break;
+			case 'B':
+				a2 = optarg;
 				break;
 			default:
 				usage(argv[0]);
@@ -372,17 +586,30 @@ main(int argc, char **argv)
 		usage(argv[0]);
 	}
 
-	opt.hlen = strlen(opt.hairpin);
-
-	if (opt.hlen < 5 || opt.hlen > 1000) {
-		fprintf(stderr, "Error: hairpin too %s (len=%zd).\n",
-				opt.hlen<5?"short":"long", opt.hlen);
-		usage(argv[0]);
+	if (opt.hp_head == NULL) {
+		// default hairpin sequences
+		h = hairpin_init("ACGCCGGCGGCAAGTGAAGCCGCCGGCGT");
+		if (h == NULL)
+			exit(1);
+		opt.hp_head = h;
+		// PCR skipped a base pair after biotin
+		h = hairpin_init("ACGCCGGCGGCAAGTAAGCCGCCGGCGT");
+		if (h == NULL)
+			exit(1);
+		opt.hp_head->next = h;
+		// PCR skipped two base pairs after biotin
+		h = hairpin_init("ACGCCGGCGGCAAGTAGCCGCCGGCGT");
+		if (h == NULL)
+			exit(1);
+		opt.hp_head->next->next = h;
 	}
 
-
-	opt.rhairpin = strdup(opt.hairpin);
-	revcomp(opt.rhairpin, opt.hlen);
+	opt.a1 = adapter_init(a1);
+	if (opt.a1 == NULL)
+		exit(1);
+	opt.a2 = adapter_init(a2);
+	if (opt.a2 == NULL)
+		exit(1);
 
 	if (fos_fn) {
 		opt.fos = fopen(fos_fn, "w");
@@ -412,7 +639,13 @@ main(int argc, char **argv)
 
 	ret = foldreads_pe(&opt, &metrics);
 
-	free(opt.rhairpin);
+	for (h=opt.hp_head; h!=NULL; ) {
+		struct hairpin *htmp = h->next;
+		hairpin_free(h);
+		h = htmp;
+	}
+	adapter_free(opt.a1);
+	adapter_free(opt.a2);
 
 	if (unmatched_pfx) {
 		fclose(opt.f_unmatched_r1);
