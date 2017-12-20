@@ -57,6 +57,7 @@ typedef struct {
 	int phred_scale_in, phred_scale_out;
 	size_t adapter_matchlen;
 
+	int n_hairpins;
 	struct hairpin *hp_head;
 	struct adapter *a1, *a2;
 } opt_t;
@@ -81,9 +82,9 @@ int
 fold(const opt_t *opt, metrics_t *metrics,
 		const char *s1, const char *q1, size_t len1,
 		const char *s2, const char *q2, size_t len2,
-		char **_s_out, char **_q_out)
+		char **_s_out, char **_q_out, int *hindex)
 {
-	struct hairpin *h;
+	struct hairpin *h, *hlast;
 	char *s_out, *q_out;
 	double mm;
 
@@ -103,45 +104,48 @@ fold(const opt_t *opt, metrics_t *metrics,
 		exit(-2);
 	}
 
-	h = opt->hp_head;
 
-next_hairpin:
-	// look for hairpin
-	find_adapters(s1, q1, len1, s2, q2, len2,
-			h->fwd->pv, h->fwd->l,
-			h->rev->pv, h->rev->l, &h1, &h2);
+	*hindex = 0;
+	for (hlast=h=opt->hp_head; h != NULL; h=h->next) {
+		hlast = h;
+		(*hindex)++;
 
-	if (h1 && h2) {
-		if (h1 != h2 && h1 < len1-opt->adapter_matchlen && h2 < len2-opt->adapter_matchlen) {
-			// polymerase slippage? chimera?
-			metrics->hairpin_dislocated++;
-			//fprintf(stderr, "PCR SLIP: %d\n", h1-h2);
+		// look for hairpin
+		find_adapters(s1, q1, len1, s2, q2, len2,
+				h->fwd->pv, h->fwd->l,
+				h->rev->pv, h->rev->l, &h1, &h2);
+
+		if (h1 != h2) {
+			// these reads are untrustworthy
+			if (h1+opt->adapter_matchlen < len1 && h2+opt->adapter_matchlen < len2) {
+				// polymerase slippage? chimera?
+				metrics->hairpin_dislocated++;
+			}
 			goto discard_reads;
 		}
-	}
-	if (h1 != h2)
-		goto discard_reads;
 
-	if (h1+h->fwd->l <= len1)// && h2+h->rev->l <= len2)
-		metrics->hairpin_complete++;
-
-	if (h1+opt->adapter_matchlen > len1) {
-		if (h->next != NULL) {
-			h = h->next;
-			goto next_hairpin;
-		} else {
-			/*
-			 * No hairpin sequences found, so look for trailing
-			 * adapters.  If found, this means the molecule lacks
-			 * a hairpin and should be distrusted.
-			 */
-			find_adapters(s1, q1, len1, s2, q2, len2,
-					opt->a1->pv, opt->a1->l,
-					opt->a2->pv, opt->a2->l, &h1, &h2);
-			if (h1+opt->adapter_matchlen < len1 || h2+opt->adapter_matchlen < len2)
-				goto discard_reads;
+		if (h1+opt->adapter_matchlen < len1) {
+			// found the hairpin
+			if (h1+h->fwd->l <= len1) // && h2+h->rev->l <= len2)
+				metrics->hairpin_complete++;
+			break;
 		}
 	}
+
+	if (h == NULL) {
+		/*
+		 * No hairpin sequences found, so look for trailing adapters.
+		 * If found, this means the molecule lacks a hairpin.
+		 */
+		int a1, a2;
+		find_adapters(s1, q1, len1, s2, q2, len2,
+				opt->a1->pv, opt->a1->l,
+				opt->a2->pv, opt->a2->l, &a1, &a2);
+		if (a1+opt->adapter_matchlen < len1 || a2+opt->adapter_matchlen < len2)
+			goto discard_reads;
+	}
+
+	h = hlast;
 
 	if (h1+h->fwd->l < len1) {// && h2+h->rev->l < len2) {
 		// short molecule, there are valid bases after the hairpin
@@ -187,6 +191,7 @@ discard_reads:
 		free(s_out);
 		free(q_out);
 		*_s_out = *_q_out = NULL;
+		*hindex = -1;
 		return 0;
 	}
 }
@@ -212,19 +217,33 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 	int len1, len2;
 	int ret, fraglen;
 	char *s_out, *q_out;
+	int hindex;
+
+	size_t *hlen_vec = calloc(opt->n_hairpins, sizeof(size_t));
+	if (hlen_vec == NULL) {
+		perror("calloc");
+		ret = -1;
+		goto err0;
+	}
+	else {
+		struct hairpin *h;
+		int i;
+		for (i=0, h=opt->hp_head; h!=NULL; i++, h=h->next)
+			hlen_vec[i] = h->fwd->l;
+	}
 
 	fp1 = gzopen(opt->fn1, "r");
 	if (fp1 == NULL) {
 		fprintf(stderr, "%s: %s\n", opt->fn1, strerror(errno));
-		ret = 1;
-		goto err0;
+		ret = -2;
+		goto err1;
 	}
 
 	fp2 = gzopen(opt->fn2, "r");
 	if (fp2 == NULL) {
 		fprintf(stderr, "%s: %s\n", opt->fn2, strerror(errno));
-		ret = 1;
-		goto err1;
+		ret = -3;
+		goto err2;
 	}
 
 	seq1 = kseq_init(fp1);
@@ -249,8 +268,8 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 		if (strcmp(seq1->name.s, seq2->name.s)) {
 			fprintf(stderr, "R1 and R2 sequence names don't match:\n%s\n%s\n",
 					seq1->name.s, seq2->name.s);
-			ret = 3;
-			goto err3;
+			ret = -4;
+			goto err4;
 		}
 
 		metrics->total_reads++;
@@ -260,14 +279,14 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 
 		if (seq1->qual.l == 0) {
 			fprintf(stderr, "%s: qual scores required.\n", opt->fn1);
-			ret = 4;
-			goto err3;
+			ret = -5;
+			goto err4;
 		}
 
 		if (seq2->qual.l == 0) {
 			fprintf(stderr, "%s: qual scores required.\n", opt->fn2);
-			ret = 4;
-			goto err3;
+			ret = -6;
+			goto err4;
 		}
 
 		if (metrics->fl_hist == NULL) {
@@ -276,26 +295,27 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 						sizeof(*metrics->fl_hist));
 			if (metrics->fl_hist == NULL) {
 				perror("malloc");
-				ret = -5;
-				goto err3;
+				ret = -7;
+				goto err4;
 			}
 		} else if (metrics->fl_hist_len != len1+1) {
 			fprintf(stderr, "Reads have different length to previous reads: %s\n",
 					seq1->name.s);
-			ret = -7;
-			goto err3;
+			ret = -8;
+			goto err4;
 		}
 
 		clean_quals(seq1->seq.s, seq1->qual.s, seq1->seq.l, opt->phred_scale_in);
 		clean_quals(seq2->seq.s, seq2->qual.s, seq2->seq.l, opt->phred_scale_in);
 
 		fraglen = fold(opt, metrics, seq1->seq.s, seq1->qual.s, seq1->seq.l,
-			seq2->seq.s, seq2->qual.s, seq2->seq.l, &s_out, &q_out);
+			seq2->seq.s, seq2->qual.s, seq2->seq.l, &s_out, &q_out, &hindex);
 		if (fraglen > 0) {
 			fprintf(opt->fos, "@%s XF:Z:%s|%s|", seq1->name.s, seq1->seq.s, seq2->seq.s);
 			fput_qual(opt->fos, opt->phred_scale_out, seq1->qual.s, seq1->qual.l);
 			fputc('|', opt->fos);
 			fput_qual(opt->fos, opt->phred_scale_out, seq2->qual.s, seq2->qual.l);
+			fprintf(opt->fos, "|%zd", hlen_vec[hindex]);
 			fprintf(opt->fos, "\n%s\n+\n", s_out);
 			fput_qual(opt->fos, opt->phred_scale_out, q_out, strlen(s_out));
 			fputc('\n', opt->fos);
@@ -326,25 +346,27 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 
 	if (len1 != -1) {
 		fprintf(stderr, "%s: unexpected end of file.\n", opt->fn1);
-		ret = -8;
-		goto err3;
+		ret = -9;
+		goto err4;
 	}
 
 	if (len2 != -1) {
 		fprintf(stderr, "%s: unexpected end of file.\n", opt->fn2);
-		ret = -8;
-		goto err3;
+		ret = -10;
+		goto err4;
 	}
 
 	ret = 0;
 
-err3:
+err4:
 	kseq_destroy(seq2);
 	kseq_destroy(seq1);
-//err2:
+//err3:
 	gzclose(fp2);
-err1:
+err2:
 	gzclose(fp1);
+err1:
+	free(hlen_vec);
 err0:
 	return ret;
 }
@@ -551,6 +573,10 @@ main(int argc, char **argv)
 				opt.metrics_fn = optarg;
 				break;
 			case 'p':
+				if (strlen(optarg) < opt.adapter_matchlen) {
+					fprintf(stderr, "Hairpin sequence `%s' too short for reliable identification\n", optarg);
+					exit(1);
+				}
 				h = hairpin_init(optarg);
 				if (h == NULL)
 					exit(1);
@@ -560,6 +586,7 @@ main(int argc, char **argv)
 				} else {
 					opt.hp_head = hp_last = h;
 				}
+				opt.n_hairpins++;
 				break;
 			case 'u':
 				unmatched_pfx = optarg;
@@ -602,6 +629,7 @@ main(int argc, char **argv)
 		if (h == NULL)
 			exit(1);
 		opt.hp_head->next->next = h;
+		opt.n_hairpins = 3;
 	}
 
 	opt.a1 = adapter_init(a1);

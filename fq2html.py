@@ -145,10 +145,11 @@ if __name__ == "__main__":
         if seqno > 1000:
             break
 
-        ss1, ss2, qq1, qq2 = comment2ssqq(comment)
+        ss1, ss2, qq1, qq2, hlen_str = comment2ssqq(comment)
+        hlen = int(hlen_str)
 
         hpi = rhpi = len(ss)
-        p5i = p7i = 2*len(ss)+len(hairpin)
+        p5i = p7i = 2*len(ss)+hlen
 
         if p5i > len(ss1):
             p5i = mmfind(p5,ss1)
@@ -175,9 +176,9 @@ if __name__ == "__main__":
                     s1_cls = "mismatch"
                 if q1>=q2:
                     s2_cls = "mismatch"
-            if hpi != -1 and i>=hpi and i<hpi+len(hairpin):
+            if hpi != -1 and i>=hpi and i<hpi+hlen:
                 s1_cls = "hairpin"
-            if rhpi != -1 and i>=rhpi and i<rhpi+len(rhairpin):
+            if rhpi != -1 and i>=rhpi and i<rhpi+hlen:
                 s2_cls = "hairpin"
             if p5i != -1 and i>=p5i:
                 s1_cls = "yadapter"
