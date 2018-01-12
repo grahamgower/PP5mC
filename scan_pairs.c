@@ -37,6 +37,8 @@ typedef struct {
 	int min_baseq;
 	char *hairpin;
 	char *rhairpin;
+	double *pv_hairpin;
+	double *pv_rhairpin;
 	size_t hlen;
 	FILE *metrics_fp;
 } opt_t;
@@ -122,11 +124,14 @@ next_aln(void *data, bam1_t *b)
 		if (len < 0)
 			continue;
 
+		clean_quals(s1, q1, len, PHRED_SCALE);
+		clean_quals(s2, q2, len, PHRED_SCALE);
+
 		if (correct_s1s2(s1, q1, len, s2, q2, len,
-				bat->opt->hairpin,
-				bat->opt->rhairpin,
+				bat->opt->pv_hairpin,
 				bat->opt->hlen,
-				PHRED_SCALE, PHRED_SCALE) == -1)
+				bat->opt->pv_rhairpin,
+				bat->opt->hlen) == -1)
 			continue;
 
 		break;
@@ -275,7 +280,7 @@ scan_pairs(opt_t *opt)
 					//fprintf(stderr, "[+]%s  %d:%d:%d  %c/%c\n", bam_get_qname(p->b), pos, p->qpos, i, ci, cj);
 				}
 
-				if (qi < PHRED_SCALE+opt->min_baseq || qj < PHRED_SCALE+opt->min_baseq)
+				if (qi < opt->min_baseq || qj < opt->min_baseq)
 					continue;
 
 				win[wi*MAX_DP + dp] = nt2int[(int)ci]<<2 | nt2int[(int)cj];
@@ -341,13 +346,14 @@ scan_pairs(opt_t *opt)
 			else
 				hairpin = 0;
 
+			/*
 			if (correct_s1s2(s1, q1, len,
 					s2, q2, len,
-					opt->hairpin,
-					opt->rhairpin,
-					opt->hlen,
-					PHRED_SCALE, PHRED_SCALE) == -1)
+					opt->pv_hairpin,
+					opt->pv_rhairpin,
+					opt->hlen) == -1)
 				continue;
+			*/
 
 			if (bam_is_rev(b)) {
 				// within the read
@@ -358,7 +364,7 @@ scan_pairs(opt_t *opt)
 					cj = s1[sx];
 					qi = q2[sx];
 					qj = q1[sx];
-					if (qi >= PHRED_SCALE+opt->min_baseq && qj >= PHRED_SCALE+opt->min_baseq)
+					if (qi >= opt->min_baseq && qj >= opt->min_baseq)
 						ctx5p[CTX_SZ+x][(nt2int[(int)ci]<<2)|nt2int[(int)cj]]++;
 
 					if (!hairpin)
@@ -370,7 +376,7 @@ scan_pairs(opt_t *opt)
 					cj = s1[sx];
 					qi = q2[sx];
 					qj = q1[sx];
-					if (qi >= PHRED_SCALE+opt->min_baseq && qj >= PHRED_SCALE+opt->min_baseq)
+					if (qi >= opt->min_baseq && qj >= opt->min_baseq)
 						ctx3p[CTX_SZ-x-1][(nt2int[(int)ci]<<2)|nt2int[(int)cj]]++;
 				}
 
@@ -401,7 +407,7 @@ scan_pairs(opt_t *opt)
 					cj = cmap[(int)s2[sx]];
 					qi = q1[sx];
 					qj = q2[sx];
-					if (qi >= PHRED_SCALE+opt->min_baseq && qj >= PHRED_SCALE+opt->min_baseq)
+					if (qi >= opt->min_baseq && qj >= opt->min_baseq)
 						ctx5p[CTX_SZ+x][(nt2int[(int)ci]<<2)|nt2int[(int)cj]]++;
 
 					if (!hairpin)
@@ -413,7 +419,7 @@ scan_pairs(opt_t *opt)
 					cj = cmap[(int)s2[sx]];
 					qi = q1[sx];
 					qj = q2[sx];
-					if (qi >= PHRED_SCALE+opt->min_baseq && qj >= PHRED_SCALE+opt->min_baseq)
+					if (qi >= opt->min_baseq && qj >= opt->min_baseq)
 						ctx3p[CTX_SZ-x-1][(nt2int[(int)ci]<<2)|nt2int[(int)cj]]++;
 				}
 
@@ -551,9 +557,17 @@ main(int argc, char **argv)
 
 	srand(31415);
 
+	str2pvec(opt.hairpin, opt.hlen, &opt.pv_hairpin);
+	str2pvec(opt.rhairpin, opt.hlen, &opt.pv_rhairpin);
+	if (opt.pv_hairpin == NULL || opt.pv_rhairpin == NULL) {
+		exit(1);
+	}
+
 	ret = (scan_pairs(&opt) != 0);
 
 	free(opt.rhairpin);
+	free(opt.pv_hairpin);
+	free(opt.pv_rhairpin);
 
 	return ret;
 }

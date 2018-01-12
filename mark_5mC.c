@@ -37,6 +37,8 @@ typedef struct {
 	char *fasta_fn;
 	char *hairpin;
 	char *rhairpin;
+	double *pv_hairpin;
+	double *pv_rhairpin;
 	size_t hlen;
 	int min_mapq;
 	int min_baseq;
@@ -237,11 +239,14 @@ next_aln(void *data, bam1_t *b)
 		if (len < 0)
 			continue;
 
+		clean_quals(s1, q1, len, PHRED_SCALE);
+		clean_quals(s2, q2, len, PHRED_SCALE);
+
 		if (correct_s1s2(s1, q1, len, s2, q2, len,
-				bat->opt->hairpin,
-				bat->opt->rhairpin,
+				bat->opt->pv_hairpin,
 				bat->opt->hlen,
-				PHRED_SCALE, PHRED_SCALE) == -1)
+				bat->opt->pv_rhairpin,
+				bat->opt->hlen) == -1)
 			continue;
 
 		break;
@@ -451,7 +456,7 @@ mark_5mC(opt_t *opt)
 						hclip>0?"HCLIP":"", hclip);
 			}*/
 
-			if (qi < PHRED_SCALE+opt->min_baseq || qj < PHRED_SCALE+opt->min_baseq)
+			if (qi < opt->min_baseq || qj < opt->min_baseq)
 				continue;
 
 			int pair = nt2int[(int)ci]<<2 | nt2int[(int)cj];
@@ -610,9 +615,17 @@ main(int argc, char **argv)
 	opt.bam_fn = argv[optind];
 	opt.fasta_fn = argv[optind+1];
 
+	str2pvec(opt.hairpin, opt.hlen, &opt.pv_hairpin);
+	str2pvec(opt.rhairpin, opt.hlen, &opt.pv_rhairpin);
+	if (opt.pv_hairpin == NULL || opt.pv_rhairpin == NULL) {
+		exit(1);
+	}
+
 	ret = (mark_5mC(&opt) != 0);
 
 	free(opt.rhairpin);
+	free(opt.pv_hairpin);
+	free(opt.pv_rhairpin);
 
 	return ret;
 }
