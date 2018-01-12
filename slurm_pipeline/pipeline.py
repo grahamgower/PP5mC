@@ -42,8 +42,11 @@ class Pipeline:
             success_filename = "{}.success".format(filename)
 
             if os.path.exists(success_filename):
-                # if the success file already exists, do nothing
-                return None
+                if self.force:
+                    os.unlink(success_filename)
+                else:
+                    # the success file already exists, do nothing
+                    return None
 
             # when the job succeeds, this file is created
             self.add_cmd("touch {}".format(success_filename))
@@ -98,11 +101,12 @@ class Pipeline:
 
         self.dot = Digraph()
 
-    def new_job(self, name, res):
+    def new_job(self, name, res, force=False):
         """A wrapper for creating the JobScript."""
         j = self.JobScript(name=name, email=self.email, queue=self.queue, res=res)
         j.tmpl.output = "{}/{}.out".format(self.acctdir, name)
         j.pipeline = self
+        j.force = force
         return j
 
     def print_graph(self):

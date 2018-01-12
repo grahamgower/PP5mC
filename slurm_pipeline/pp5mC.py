@@ -67,12 +67,15 @@ def do_fold(p, rd, jobsize, sample, lib, runid, r1, r2):
     if os.path.exists(metrics) and os.path.exists(fastq):
         # nothing to do
         return None
+        force = False
+    else:
+        force = True
 
     filecheck(r1)
     filecheck(r2)
 
     res = Resource(rd["01:fold"], jobsize)
-    j = p.new_job("01:fold:{}".format(pfx), res)
+    j = p.new_job("01:fold:{}".format(pfx), res, force)
 
     fold_cmd = ["foldreads",
             "-m", metrics,
@@ -93,12 +96,16 @@ def do_map(p, rd, jobsize, sample, lib, runid, refid, ref, deps):
     bam = "{}.{}.bam".format(opfx, refid)
     bai = "{}.bai".format(bam)
 
+    force = False
+
     if os.path.exists(bam) and os.path.exists(bai):
         ret = subprocess.call(["samtools", "quickcheck", bam])
         if ret == 0:
             # nothing to do
             return None
-        
+        else:
+            force = True
+
     # remove files if they exist, we will remap
     if os.path.lexists(bai):
         os.unlink(bai)
@@ -106,7 +113,7 @@ def do_map(p, rd, jobsize, sample, lib, runid, refid, ref, deps):
         os.unlink(bam)
 
     res = Resource(rd["02:map"], jobsize)
-    j = p.new_job("02:map:{}.{}".format(pfx, refid), res)
+    j = p.new_job("02:map:{}.{}".format(pfx, refid), res, force)
 
     bwa_cmd = ["bwa mem",
             "-t {}".format(res.cpus),
@@ -151,6 +158,8 @@ def do_merge_runs(p, rd, jobsize, sample, lib, runid_list, refid, deps):
     obam = "{}.bam".format(opfx)
     obai = "{}.bai".format(obam)
 
+    force = False
+
     if os.path.exists(obam) and os.path.exists(obai):
         ret = subprocess.call(["samtools", "quickcheck", obam])
         if ret == 0:
@@ -160,6 +169,10 @@ def do_merge_runs(p, rd, jobsize, sample, lib, runid_list, refid, deps):
             if hdr_rgs == exp_rgs:
                 # nothing to do
                 return None
+            else:
+                force = True
+        else:
+            force = True
 
     if len(runid_list) == 1:
         # nothing to merge, just symlink
@@ -180,7 +193,7 @@ def do_merge_runs(p, rd, jobsize, sample, lib, runid_list, refid, deps):
         ibamlist.append(rbam)
 
     res = Resource(rd["03:mergeruns"], jobsize)
-    j = p.new_job("03:mergeruns:{}".format(pfx), res)
+    j = p.new_job("03:mergeruns:{}".format(pfx), res, force)
 
     j.add_cmd("rm -f {}".format(obai))
     j.add_cmd("rm -f {}".format(obam))
@@ -200,14 +213,18 @@ def do_dedup(p, rd, jobsize, sample, lib, refid, deps):
     obam = "{}.dedup.bam".format(opfx)
     obai = "{}.bai".format(obam)
 
+    force = False
+
     if os.path.exists(obam) and os.path.exists(obai):
         ret = subprocess.call(["samtools", "quickcheck", obam])
         if ret == 0:
             # nothing to do
             return None
+        else:
+            force = True
 
     res = Resource(rd["04:dedup"], jobsize)
-    j = p.new_job("04:dedup:{}".format(pfx), res)
+    j = p.new_job("04:dedup:{}".format(pfx), res, force)
 
     j.add_cmd("rm -f {}".format(obai))
     j.add_cmd("rm -f {}".format(obam))
@@ -228,6 +245,8 @@ def do_merge_libs(p, rd, jobsize, sample, lib_list, sl_info, refid, deps):
     obam = "{}.bam".format(opfx)
     obai = "{}.bai".format(obam)
 
+    force = False
+
     if os.path.exists(obam) and os.path.exists(obai):
         ret = subprocess.call(["samtools", "quickcheck", obam])
         if ret == 0:
@@ -240,6 +259,10 @@ def do_merge_libs(p, rd, jobsize, sample, lib_list, sl_info, refid, deps):
             if hdr_rgs == exp_rgs:
                 # nothing to do
                 return None
+            else:
+                force = True
+        else:
+            force = True
         
     if len(lib_list) == 1:
         # nothing to merge, just symlink
@@ -259,7 +282,7 @@ def do_merge_libs(p, rd, jobsize, sample, lib_list, sl_info, refid, deps):
         ibamlist.append(lbam)
 
     res = Resource(rd["05:mergelibs"], jobsize)
-    j = p.new_job("05:mergelibs:{}".format(pfx), res)
+    j = p.new_job("05:mergelibs:{}".format(pfx), res, force)
 
     j.add_cmd("rm -f {}".format(obai))
     j.add_cmd("rm -f {}".format(obam))
@@ -283,15 +306,19 @@ def do_indel_realign(p, rd, jobsize, sample, refid, ref, deps):
     obam2 = "{}.{}.bam".format(sample, refid)
     obai2 = "{}.bai".format(obam2)
 
+    force = False
+
     if os.path.exists(obam2) and os.path.exists(obai2):
         ret = subprocess.call(["samtools", "quickcheck", obam2])
         if ret == 0:
             # nothing to do
             return None
+        else:
+            force = True
         
     # train realigner
     res1 = Resource(rd["06:realign1"], jobsize)
-    j1 = p.new_job("06:realign1:{}".format(pfx), res1)
+    j1 = p.new_job("06:realign1:{}".format(pfx), res1, force)
     j1.add_cmd("rm -f {}".format(intervals))
     gatk_cmd1 = ["$gatk", # must have this defined somewhere
                 "-T RealignerTargetCreator",
@@ -304,7 +331,7 @@ def do_indel_realign(p, rd, jobsize, sample, refid, ref, deps):
 
     # do indel realignment
     res2 = Resource(rd["06:realign2"], jobsize)
-    j2 = p.new_job("06:realign2:{}".format(pfx), res2)
+    j2 = p.new_job("06:realign2:{}".format(pfx), res2, force)
     j2.add_cmd("rm -f {}".format(obam1))
     gatk_cmd2 = ["$gatk",
                 "-T IndelRealigner",
@@ -320,7 +347,7 @@ def do_indel_realign(p, rd, jobsize, sample, refid, ref, deps):
 
     # regenerate MD tags to match realignments
     res3 = Resource(rd["06:realign3"], jobsize)
-    j3 = p.new_job("06:realign3:{}".format(pfx), res2)
+    j3 = p.new_job("06:realign3:{}".format(pfx), res2, force)
     j3.add_cmd("rm -f {}".format(obam2))
     j3.add_cmd("rm -f {}".format(obai2))
     calmd_cmd = ["samtools calmd",
@@ -340,6 +367,7 @@ def do_mark_5mC(p, rd, jobsize, sample, refid, ref, deps):
     ibam = "{}.bam".format(pfx)
     methlist = "{}.methlist.txt.gz".format(pfx)
 
+    force = False
     skip = True
     for fmt in ("methylkit", "pileOmeth"):
         for ctx in ("CpG", "CHG", "CHH"):
@@ -351,9 +379,11 @@ def do_mark_5mC(p, rd, jobsize, sample, refid, ref, deps):
     if os.path.exists(methlist) and skip:
         # all files present, nothing to do
         return None
+    else:
+        force = True
 
     res = Resource(rd["07:mark5mC"], jobsize)
-    j = p.new_job("07:mark5mC:{}".format(pfx), res)
+    j = p.new_job("07:mark5mC:{}".format(pfx), res, force)
 
     j.add_cmd("rm -f {}".format(methlist))
     cmd1 = ["mark_5mC",
@@ -495,6 +525,6 @@ if __name__ == "__main__":
         deplist = dedup_jobs[sample]
         merge_libs_jobid = do_merge_libs(p, rd, filesize, sample, lib_list, sl_info, refid, deplist)
         realign_jobid = do_indel_realign(p, rd, filesize, sample, refid, ref, merge_libs_jobid)
-        mark5mC_jobid = do_mark_5mC(p, rd, filesize, sample, refid, ref, realign_jobid)
+        #mark5mC_jobid = do_mark_5mC(p, rd, filesize, sample, refid, ref, realign_jobid)
 
     p.print_graph()
