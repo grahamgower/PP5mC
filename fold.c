@@ -564,33 +564,22 @@ match4(const char *_s1, const char *_q1, size_t len1,
  * Like match4(), but correct the sequence and qualities in place
  * instead of copying.  And there is no matching of s1 to s2 here.
  */
-int
+void
 correct_s1s2(char *s1, char *q1, size_t len1,
 		char *s2, char *q2, size_t len2,
-		const double *pv1, size_t pv1_len,
-		const double *pv2, size_t pv2_len)
+		size_t hplen, size_t hppos)
 {
-	int h1, h2;
-
-	find_adapters(s1, q1, len1, s2, q2, len2,
-			pv1, pv1_len, pv2, pv2_len,
-			&h1, &h2);
-
-	if (h1 != 0 && h2 != 0 && h1 != h2)
-		// dislocated hairpins
-		return -1;
-
-	if (h1+pv1_len < len1 && h2+pv2_len < len2) {
+	if (hppos+hplen < len1) {
 		// short molecule, there are valid bases after the hairpin
-		char *s3 = s1 + h1 + pv1_len;
-		char *q3 = q1 + h1 + pv1_len;
-		char *s4 = s2 + h2 + pv2_len;
-		char *q4 = q2 + h2 + pv2_len;
+		char *s3 = s1 + hppos + hplen;
+		char *q3 = q1 + hppos + hplen;
+		char *s4 = s2 + hppos + hplen;
+		char *q4 = q2 + hppos + hplen;
 
-		int len3 = 2*h1+pv1_len > len1 ? len1 - h1 - pv1_len : h1;
-		int len4 = 2*h2+pv2_len > len2 ? len2 - h2 - pv2_len : h2;
-		int len1 = h1;
-		int len2 = h2;
+		int len3 = 2*hppos+hplen > len1 ? len1 - hppos - hplen : hppos;
+		int len4 = 2*hppos+hplen > len2 ? len2 - hppos - hplen : hppos;
+		int len1 = hppos;
+		int len2 = hppos;
 
 		assert(len1 >= len4);
 		assert(len2 >= len3);
@@ -609,34 +598,6 @@ correct_s1s2(char *s1, char *q1, size_t len1,
 			s2+len2-len3, q2+len2-len3,
 			0);
 	}
-
-	return 0;
-}
-
-/*
- * Parse the XF:Z sam/bam field, containing pipe delimited sequence
- * and quality scores, i.e. XF:Z:s1|s2|q1|q2.
- */
-int
-xf2ssqq(char *xf, char **s1, char **s2, char **q1, char **q2)
-{
-	char *p = xf;
-	int len;
-
-	while (*p != 0 && *p != '|')
-		p++;
-
-	if (*p == 0)
-		return -1;
-
-	len = p-xf;
-
-	*s1 = xf;
-	*s2 = xf+len+1;
-	*q1 = xf+2*(len+1);
-	*q2 = xf+3*(len+1);
-
-	return len;
 }
 
 /*

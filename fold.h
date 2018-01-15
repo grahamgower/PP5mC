@@ -1,6 +1,8 @@
 #ifndef _FOLD_H
 #define _FOLD_H
 
+#define FOLDREADS_VERSION "11"
+
 // max Q value for output
 #define Q_MAX 40
 
@@ -48,14 +50,10 @@ match4(const char *_s1, const char *_q1, size_t len1,
 	const char *_s4, const char *_q4, size_t len4,
 	char *s_out, char *q_out);
 
-int
+void
 correct_s1s2(char *s1, char *q1, size_t len1,
 		char *s2, char *q2, size_t len2,
-		const double *pv1, size_t pv1_len,
-		const double *pv2, size_t pv2_len);
-
-int
-xf2ssqq(char *xf, char **s1, char **s2, char **q1, char **q2);
+		size_t hplen, size_t hppos);
 
 void
 clean_quals(const char *s, char *q, size_t len, int phred_scale_in);

@@ -10,14 +10,16 @@ except NameError:
     pass
 
 def comment2ssqq(label):
+    tags = {}
     for field in label.split():
-        if field.startswith("XF:Z:"):
-            field = field[5:]
-            break
-    else:
-        raise Exception("missing XF field for label: `{}'".format(label))
-    
-    return field.split("|")
+        try:
+            tag, type, val = field.split(":", 2)
+        except ValueError:
+            raise Exception("unknown comment field ``{}''".format(field))
+
+        tags[tag] = val
+
+    return tags["r1"], tags["r2"], tags["q1"], tags["q2"], tags.get("hp", "")
 
 def parse_fq(filename):
     """
@@ -145,8 +147,8 @@ if __name__ == "__main__":
         if seqno > 1000:
             break
 
-        ss1, ss2, qq1, qq2, hlen_str = comment2ssqq(comment)
-        hlen = int(hlen_str)
+        ss1, ss2, qq1, qq2, hp = comment2ssqq(comment)
+        hlen = len(hp)
 
         hpi = rhpi = len(ss)
         p5i = p7i = 2*len(ss)+hlen

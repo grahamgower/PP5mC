@@ -1,7 +1,7 @@
 /*
  * Fold r1/r2 sequences back together at the hairpin.
  *
- * Copyright (c) 2016,2017 Graham Gower <graham.gower@gmail.com>
+ * Copyright (c) 2016-2018 Graham Gower <graham.gower@gmail.com>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -31,8 +31,6 @@ KSEQ_INIT(gzFile, gzread);
 
 #include "fold.h"
 
-#define FOLDREADS_VERSION "10"
-
 #define min(a,b) ((a)<(b)?(a):(b))
 #define max(a,b) ((a)>(b)?(a):(b))
 
@@ -46,7 +44,6 @@ struct adapter {
 
 struct hairpin {
 	struct adapter *fwd, *rev;
-	struct hairpin *next;
 };
 
 typedef struct {
@@ -58,7 +55,7 @@ typedef struct {
 	size_t adapter_matchlen;
 
 	int n_hairpins;
-	struct hairpin *hp_head;
+	struct hairpin *hplist;
 	struct adapter *a1, *a2;
 } opt_t;
 
@@ -71,6 +68,9 @@ typedef struct {
 	// fragment length histogram
 	uint64_t *fl_hist;
 	size_t fl_hist_len;
+
+	// hairpin counts
+	uint64_t *hp_hist;
 } metrics_t;
 
 /*
@@ -84,9 +84,10 @@ fold(const opt_t *opt, metrics_t *metrics,
 		const char *s2, const char *q2, size_t len2,
 		char **_s_out, char **_q_out, int *hindex)
 {
-	struct hairpin *h, *hlast;
+	struct hairpin *h = NULL;
 	char *s_out, *q_out;
 	double mm;
+	int i;
 
 	// hairpin indices
 	int h1, h2;
@@ -105,10 +106,10 @@ fold(const opt_t *opt, metrics_t *metrics,
 	}
 
 
-	*hindex = 0;
-	for (hlast=h=opt->hp_head; h != NULL; h=h->next) {
-		hlast = h;
-		(*hindex)++;
+	*hindex = -1;
+
+	for (i=0; i<opt->n_hairpins; i++) {
+		h = opt->hplist + i;
 
 		// look for hairpin
 		find_adapters(s1, q1, len1, s2, q2, len2,
@@ -126,13 +127,14 @@ fold(const opt_t *opt, metrics_t *metrics,
 
 		if (h1+opt->adapter_matchlen < len1) {
 			// found the hairpin
+			*hindex = i;
 			if (h1+h->fwd->l <= len1) // && h2+h->rev->l <= len2)
 				metrics->hairpin_complete++;
 			break;
 		}
 	}
 
-	if (h == NULL) {
+	if (*hindex == -1) {
 		/*
 		 * No hairpin sequences found, so look for trailing adapters.
 		 * If found, this means the molecule lacks a hairpin.
@@ -145,9 +147,7 @@ fold(const opt_t *opt, metrics_t *metrics,
 			goto discard_reads;
 	}
 
-	h = hlast;
-
-	if (h1+h->fwd->l < len1) {// && h2+h->rev->l < len2) {
+	if (*hindex != -1 && h1+h->fwd->l < len1) {// && h2+h->rev->l < len2) {
 		// short molecule, there are valid bases after the hairpin
 		const char *s3 = s1 + h1 + h->fwd->l;
 		const char *q3 = q1 + h1 + h->fwd->l;
@@ -166,8 +166,10 @@ fold(const opt_t *opt, metrics_t *metrics,
 				s_out, q_out);
 	} else {
 		// long molecule, just match up to the hairpin
-		len1 = h1;
-		len2 = h2;
+		if (*hindex != -1) {
+			len1 = h1;
+			len2 = h2;
+		}
 		match2(s1, q1, len1,
 				s2, q2, len2,
 				s_out, q_out,
@@ -219,31 +221,25 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 	char *s_out, *q_out;
 	int hindex;
 
-	size_t *hlen_vec = calloc(opt->n_hairpins, sizeof(size_t));
-	if (hlen_vec == NULL) {
+	metrics->hp_hist = calloc(opt->n_hairpins, sizeof(*metrics->hp_hist));
+	if (metrics->hp_hist == NULL) {
 		perror("calloc");
 		ret = -1;
 		goto err0;
-	}
-	else {
-		struct hairpin *h;
-		int i;
-		for (i=0, h=opt->hp_head; h!=NULL; i++, h=h->next)
-			hlen_vec[i] = h->fwd->l;
 	}
 
 	fp1 = gzopen(opt->fn1, "r");
 	if (fp1 == NULL) {
 		fprintf(stderr, "%s: %s\n", opt->fn1, strerror(errno));
 		ret = -2;
-		goto err1;
+		goto err0;
 	}
 
 	fp2 = gzopen(opt->fn2, "r");
 	if (fp2 == NULL) {
 		fprintf(stderr, "%s: %s\n", opt->fn2, strerror(errno));
 		ret = -3;
-		goto err2;
+		goto err1;
 	}
 
 	seq1 = kseq_init(fp1);
@@ -269,7 +265,7 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 			fprintf(stderr, "R1 and R2 sequence names don't match:\n%s\n%s\n",
 					seq1->name.s, seq2->name.s);
 			ret = -4;
-			goto err4;
+			goto err3;
 		}
 
 		metrics->total_reads++;
@@ -280,13 +276,13 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 		if (seq1->qual.l == 0) {
 			fprintf(stderr, "%s: qual scores required.\n", opt->fn1);
 			ret = -5;
-			goto err4;
+			goto err3;
 		}
 
 		if (seq2->qual.l == 0) {
 			fprintf(stderr, "%s: qual scores required.\n", opt->fn2);
 			ret = -6;
-			goto err4;
+			goto err3;
 		}
 
 		if (metrics->fl_hist == NULL) {
@@ -296,13 +292,13 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 			if (metrics->fl_hist == NULL) {
 				perror("malloc");
 				ret = -7;
-				goto err4;
+				goto err3;
 			}
 		} else if (metrics->fl_hist_len != len1+1) {
 			fprintf(stderr, "Reads have different length to previous reads: %s\n",
 					seq1->name.s);
 			ret = -8;
-			goto err4;
+			goto err3;
 		}
 
 		clean_quals(seq1->seq.s, seq1->qual.s, seq1->seq.l, opt->phred_scale_in);
@@ -311,13 +307,25 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 		fraglen = fold(opt, metrics, seq1->seq.s, seq1->qual.s, seq1->seq.l,
 			seq2->seq.s, seq2->qual.s, seq2->seq.l, &s_out, &q_out, &hindex);
 		if (fraglen > 0) {
-			fprintf(opt->fos, "@%s XF:Z:%s|%s|", seq1->name.s, seq1->seq.s, seq2->seq.s);
+			fprintf(opt->fos, "@%s", seq1->name.s);
+
+			fprintf(opt->fos, "\tr1:Z:%s", seq1->seq.s);
+			fprintf(opt->fos, "\tq1:Z:");
 			fput_qual(opt->fos, opt->phred_scale_out, seq1->qual.s, seq1->qual.l);
-			fputc('|', opt->fos);
+
+			fprintf(opt->fos, "\tr2:Z:%s", seq2->seq.s);
+			fprintf(opt->fos, "\tq2:Z:");
 			fput_qual(opt->fos, opt->phred_scale_out, seq2->qual.s, seq2->qual.l);
-			fprintf(opt->fos, "|%zd", hlen_vec[hindex]);
+
+			if (hindex != -1) {
+				struct hairpin *h = opt->hplist + hindex;
+				fprintf(opt->fos, " hp:Z:%s", h->fwd->s);
+				metrics->hp_hist[hindex]++;
+			}
+
 			fprintf(opt->fos, "\n%s\n+\n", s_out);
 			fput_qual(opt->fos, opt->phred_scale_out, q_out, strlen(s_out));
+
 			fputc('\n', opt->fos);
 
 			free(s_out);
@@ -347,26 +355,24 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 	if (len1 != -1) {
 		fprintf(stderr, "%s: unexpected end of file.\n", opt->fn1);
 		ret = -9;
-		goto err4;
+		goto err3;
 	}
 
 	if (len2 != -1) {
 		fprintf(stderr, "%s: unexpected end of file.\n", opt->fn2);
 		ret = -10;
-		goto err4;
+		goto err3;
 	}
 
 	ret = 0;
 
-err4:
+err3:
 	kseq_destroy(seq2);
 	kseq_destroy(seq1);
-//err3:
+//err2:
 	gzclose(fp2);
-err2:
-	gzclose(fp1);
 err1:
-	free(hlen_vec);
+	gzclose(fp1);
 err0:
 	return ret;
 }
@@ -374,8 +380,8 @@ err0:
 void
 print_metrics(const opt_t *opt, const metrics_t *metrics)
 {
-	int i;
 	FILE *fp = stderr;
+	int i;
 
 	if (opt->metrics_fn) {
 		fp = fopen(opt->metrics_fn, "w");
@@ -399,6 +405,14 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 
 	fprintf(fp, "# Number of read pairs with dislocated hairpin.\n");
 	fprintf(fp, "ND\t%jd\n\n", (uintmax_t)metrics->hairpin_dislocated);
+
+	fprintf(fp, "# Number of hairpins identified for each hairpin.\n");
+	fprintf(fp, "#HP\tseq\tnum\n");
+	for (i=0; i<opt->n_hairpins; i++) {
+		struct hairpin *h = opt->hplist+i;
+		fprintf(fp, "HP\t%s\t%jd\n", h->fwd->s, (uintmax_t)metrics->hp_hist[i]);
+	}
+	fprintf(fp, "\n");
 
 
 	int histlen = metrics->fl_hist_len -1 -opt->adapter_matchlen;
@@ -427,6 +441,7 @@ print_metrics(const opt_t *opt, const metrics_t *metrics)
 	//fprintf(fp, "\n");
 
 	free(metrics->fl_hist);
+	free(metrics->hp_hist);
 
 	if (fp != stderr)
 		fclose(fp);
@@ -482,48 +497,42 @@ adapter_free(struct adapter *a)
 	free(a);
 }
 
-struct hairpin *
-hairpin_init(const char *s)
+int
+hairpin_init(struct hairpin *h, const char *s)
 {
-	struct hairpin *h;
 	char *s_rev;
-
-	h = calloc(sizeof(*h), 1);
-	if (h == NULL) {
-		perror("hairpin_init:calloc");
-		goto err0;
-	}
+	int ret;
 
 	h->fwd = adapter_init(s);
-	if (h->fwd == NULL)
-		goto err1;
+	if (h->fwd == NULL) {
+		ret = -1;
+		goto err0;
+	}
 
 	s_rev = strdup(s);
 	revcomp(s_rev, h->fwd->l);
 
 	h->rev = adapter_init(s_rev);
-	if (h->fwd == NULL)
-		goto err2;
+	free(s_rev);
+	if (h->fwd == NULL) {
+		ret = -2;
+		goto err1;
+	}
 
-	return h;
-//err3:
+	return 0;
+//err2:
 //	adapter_free(h->rev);
-err2:
-	adapter_free(h->fwd);
 err1:
-	free(h);
+	adapter_free(h->fwd);
 err0:
-	return NULL;
+	return ret;
 }
 
 void
 hairpin_free(struct hairpin *h)
 {
-	if (h == NULL)
-		return;
 	adapter_free(h->rev);
 	adapter_free(h->fwd);
-	free(h);
 }
 
 void
@@ -547,8 +556,9 @@ main(int argc, char **argv)
 {
 	opt_t opt;
 	metrics_t metrics;
-	struct hairpin *h, *hp_last = NULL;
+	struct hairpin *htmp, *h = NULL;
 	int c, ret;
+	int i;
 	char *unmatched_pfx = NULL;
 	char *fos_fn = NULL;
 	char *a1, *a2;
@@ -577,16 +587,16 @@ main(int argc, char **argv)
 					fprintf(stderr, "Hairpin sequence `%s' too short for reliable identification\n", optarg);
 					exit(1);
 				}
-				h = hairpin_init(optarg);
-				if (h == NULL)
-					exit(1);
-				if (hp_last != NULL) {
-					hp_last->next = h;
-					hp_last = h;
-				} else {
-					opt.hp_head = hp_last = h;
-				}
 				opt.n_hairpins++;
+				htmp = realloc(h, sizeof(*h)*opt.n_hairpins);
+				if (htmp == NULL) {
+					free(h);
+					perror("realloc");
+					exit(1);
+				}
+				h = htmp;
+				if (hairpin_init(h + (opt.n_hairpins-1), optarg) < 0)
+					exit(1);
 				break;
 			case 'u':
 				unmatched_pfx = optarg;
@@ -613,24 +623,28 @@ main(int argc, char **argv)
 		usage(argv[0]);
 	}
 
-	if (opt.hp_head == NULL) {
-		// default hairpin sequences
-		h = hairpin_init("ACGCCGGCGGCAAGTGAAGCCGCCGGCGT");
-		if (h == NULL)
-			exit(1);
-		opt.hp_head = h;
-		// PCR skipped a base pair after biotin
-		h = hairpin_init("ACGCCGGCGGCAAGTAAGCCGCCGGCGT");
-		if (h == NULL)
-			exit(1);
-		opt.hp_head->next = h;
-		// PCR skipped two base pairs after biotin
-		h = hairpin_init("ACGCCGGCGGCAAGTAGCCGCCGGCGT");
-		if (h == NULL)
-			exit(1);
-		opt.hp_head->next->next = h;
+	if (h == NULL) {
 		opt.n_hairpins = 3;
+		h = malloc(sizeof(*h)*opt.n_hairpins);
+		if (h == NULL) {
+			perror("malloc");
+			exit(1);
+		}
+
+		// default hairpin sequence, central T is biotinylated
+		if (hairpin_init(h, "ACGCCGGCGGCAAGTGAAGCCGCCGGCGT") < 0)
+			exit(1);
+
+		// polymerase skipped a base after biotin
+		if (hairpin_init(h+1, "ACGCCGGCGGCAAGTAAGCCGCCGGCGT") < 0)
+			exit(1);
+
+		// polymerase skipped two bases after biotin
+		if (hairpin_init(h+2, "ACGCCGGCGGCAAGTAGCCGCCGGCGT") < 0)
+			exit(1);
 	}
+
+	opt.hplist = h;
 
 	opt.a1 = adapter_init(a1);
 	if (opt.a1 == NULL)
@@ -667,14 +681,6 @@ main(int argc, char **argv)
 
 	ret = foldreads_pe(&opt, &metrics);
 
-	for (h=opt.hp_head; h!=NULL; ) {
-		struct hairpin *htmp = h->next;
-		hairpin_free(h);
-		h = htmp;
-	}
-	adapter_free(opt.a1);
-	adapter_free(opt.a2);
-
 	if (unmatched_pfx) {
 		fclose(opt.f_unmatched_r1);
 		fclose(opt.f_unmatched_r2);
@@ -683,7 +689,15 @@ main(int argc, char **argv)
 	if (fos_fn)
 		fclose(opt.fos);
 
+	adapter_free(opt.a1);
+	adapter_free(opt.a2);
+
 	print_metrics(&opt, &metrics);
+
+	for (i=0; i<opt.n_hairpins; i++) {
+		hairpin_free(h+i);
+	}
+	free(h);
 
 	return ret;
 }

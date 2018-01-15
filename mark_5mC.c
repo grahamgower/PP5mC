@@ -1,7 +1,7 @@
 /*
  * Print per-site methylation counts.
  *
- * Copyright (c) 2016,2017 Graham Gower <graham.gower@gmail.com>
+ * Copyright (c) 2016-2018 Graham Gower <graham.gower@gmail.com>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -30,16 +30,12 @@
 KSTREAM_INIT(int, read, 16384);
 
 #include "fold.h"
+#include "aux.h"
 
 typedef struct {
 	char *bam_fn;
 	char *bed_fn;
 	char *fasta_fn;
-	char *hairpin;
-	char *rhairpin;
-	double *pv_hairpin;
-	double *pv_rhairpin;
-	size_t hlen;
 	int min_mapq;
 	int min_baseq;
 	int min_5;
@@ -189,10 +185,8 @@ next_aln(void *data, bam1_t *b)
 	bam_aux_t *bat = data;
 	int ret;
 
-	uint8_t *xf_aux;
-	char *xf;
-	char *s1, *s2, *q1, *q2;
-	int len;
+	char *s1, *s2, *q1, *q2, *hp;
+	size_t len, hppos, hplen;
 
 	while (1) {
 		if (bat->opt->bed_fn) {
@@ -228,26 +222,19 @@ next_aln(void *data, bam1_t *b)
 			// skip these
 			continue;
 
-		xf_aux = bam_aux_get(b, "XF");
-		if (xf_aux == NULL)
-			continue;
-		xf = bam_aux2Z(xf_aux);
-		if (xf == NULL)
-			continue;
+		if (aux2rrqqhp(b, &s1, &s2, &q1, &q2, &hp) < 0) {
+			ret = -1;
+			break;
+		}
 
-		len = xf2ssqq(xf, &s1, &s2, &q1, &q2);
-		if (len < 0)
-			continue;
+		len = strlen(s1);
+		hplen = hp ? strlen(hp) : 0;
+		hppos = b->core.l_qseq;
 
 		clean_quals(s1, q1, len, PHRED_SCALE);
 		clean_quals(s2, q2, len, PHRED_SCALE);
-
-		if (correct_s1s2(s1, q1, len, s2, q2, len,
-				bat->opt->pv_hairpin,
-				bat->opt->hlen,
-				bat->opt->pv_rhairpin,
-				bat->opt->hlen) == -1)
-			continue;
+		if (hplen)
+			correct_s1s2(s1, q1, len, s2, q2, len, hplen, hppos);
 
 		break;
 	}
@@ -387,9 +374,7 @@ mark_5mC(opt_t *opt)
 
 		for (i=0; i<n; i++) {
 			const bam_pileup1_t *p = plp + i;
-			uint8_t *xf_aux;
-			char *xf;
-			char *s1, *s2, *q1, *q2;
+			char *s1, *s2, *q1, *q2, *hp;
 			int ci, cj;
 			int qi, qj;
 
@@ -402,22 +387,8 @@ mark_5mC(opt_t *opt)
 			if (bam_get_qual(p->b)[p->qpos] < opt->min_baseq)
 				continue;
 
-			xf_aux = bam_aux_get(p->b, "XF");
-			if (xf_aux == NULL) {
-				fprintf(stderr, "%s:%d: missing auxiliary field XF:Z\n", bam_get_qname(p->b), pos);
+			if (aux2rrqqhp(p->b, &s1, &s2, &q1, &q2, &hp) < 0) {
 				ret = -6;
-				goto err5;
-			}
-			xf = bam_aux2Z(xf_aux);
-			if (xf == NULL) {
-				fprintf(stderr, "%s:%d: invalid auxiliary field XF, not XF:Z\n", bam_get_qname(p->b), pos);
-				ret = -7;
-				goto err5;
-			}
-
-			if (xf2ssqq(xf, &s1, &s2, &q1, &q2) < 0) {
-				fprintf(stderr, "%s:%d: invalid auxiliary field XF:Z, not created by foldreads\n", bam_get_qname(p->b), pos);
-				ret = -8;
 				goto err5;
 			}
 
@@ -521,12 +492,11 @@ err0:
 void
 usage(char *argv0, opt_t *opt)
 {
-	fprintf(stderr, "mark_5mC v9\n\n");
+	fprintf(stderr, "mark_5mC v%s\n\n", FOLDREADS_VERSION);
 	fprintf(stderr, " Print the methylation status of cytosines in CpG/CHG/CHH contexts,\n"
 			" where context is determined from the reference sequence.\n\n");
 
 	fprintf(stderr, "usage: %s [...] in.bam ref.fasta\n", argv0);
-	fprintf(stderr, " -p SEQ            The hairpin SEQuence\n");
 	fprintf(stderr, " -b REGIONS.BED    Count methylation levels for specified regions\n");
 	fprintf(stderr, " -M MAPQ           Minimum mapping quality for a read to be counted [%d]\n", opt->min_mapq);
 	fprintf(stderr, " -B BASEQ          Minimum base quality for a base to be counted [%d]\n", opt->min_baseq);
@@ -540,7 +510,6 @@ main(int argc, char **argv)
 {
 	opt_t opt;
 	int c;
-	int i;
 	int ret;
 
 	memset(&opt, 0, sizeof(opt_t));
@@ -548,15 +517,9 @@ main(int argc, char **argv)
 	opt.min_baseq = 10;
 	opt.min_5 = 0;
 	opt.min_3 = 0;
-	opt.hairpin = "ACGCCGGCGGCAAGTGAAGCCGCCGGCGT";
 
-	while ((c = getopt(argc, argv, "p:b:M:B:5:3:")) != -1) {
+	while ((c = getopt(argc, argv, "b:M:B:5:3:")) != -1) {
 		switch (c) {
-			case 'p':
-				opt.hairpin = optarg;
-				for (i=0; i<strlen(opt.hairpin); i++)
-					opt.hairpin[i] = toupper(opt.hairpin[i]);
-				break;
 			case 'b':
 				opt.bed_fn = optarg;
 				break;
@@ -593,21 +556,6 @@ main(int argc, char **argv)
 		}
 	}
 
-	if (opt.hairpin == NULL) {
-		fprintf(stderr, "Error: must specify a hairpin sequence.\n");
-		usage(argv[0], &opt);
-	}
-
-	opt.hlen = strlen(opt.hairpin);
-	if (opt.hlen < 5 || opt.hlen > 1000) {
-		fprintf(stderr, "Error: hairpin too %s (len=%zd).\n",
-				opt.hlen<5?"short":"long", opt.hlen);
-		usage(argv[0], &opt);
-	}
-
-	opt.rhairpin = strdup(opt.hairpin);
-	revcomp(opt.rhairpin, opt.hlen);
-
 	if (argc-optind != 2) {
 		usage(argv[0], &opt);
 	}
@@ -615,17 +563,7 @@ main(int argc, char **argv)
 	opt.bam_fn = argv[optind];
 	opt.fasta_fn = argv[optind+1];
 
-	str2pvec(opt.hairpin, opt.hlen, &opt.pv_hairpin);
-	str2pvec(opt.rhairpin, opt.hlen, &opt.pv_rhairpin);
-	if (opt.pv_hairpin == NULL || opt.pv_rhairpin == NULL) {
-		exit(1);
-	}
-
 	ret = (mark_5mC(&opt) != 0);
-
-	free(opt.rhairpin);
-	free(opt.pv_hairpin);
-	free(opt.pv_rhairpin);
 
 	return ret;
 }

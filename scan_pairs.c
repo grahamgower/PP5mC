@@ -1,7 +1,7 @@
 /*
  * Obtain pairing information from XF bam field.
  *
- * Copyright (c) 2016 Graham Gower <graham.gower@gmail.com>
+ * Copyright (c) 2016-2018 Graham Gower <graham.gower@gmail.com>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -29,17 +29,13 @@
 KSTREAM_INIT(int, read, 16384);
 
 #include "fold.h"
+#include "aux.h"
 
 typedef struct {
 	char *bam_fn;
 	char *bed_fn;
 	int min_mapq;
 	int min_baseq;
-	char *hairpin;
-	char *rhairpin;
-	double *pv_hairpin;
-	double *pv_rhairpin;
-	size_t hlen;
 	FILE *metrics_fp;
 } opt_t;
 
@@ -92,10 +88,8 @@ next_aln(void *data, bam1_t *b)
 	bam_aux_t *bat = data;
 	int ret;
 
-	uint8_t *xf_aux;
-	char *xf;
-	char *s1, *s2, *q1, *q2;
-	int len;
+	char *s1, *s2, *q1, *q2, *hp;
+	size_t len, hplen, hppos;
 
 	while (1) {
 		ret = sam_itr_next(bat->bam_fp, bat->bam_iter, b);
@@ -113,26 +107,19 @@ next_aln(void *data, bam1_t *b)
 			// exclude reads which are clipped or contain indels
 			continue;
 
-		xf_aux = bam_aux_get(b, "XF");
-		if (xf_aux == NULL)
-			continue;
-		xf = bam_aux2Z(xf_aux);
-		if (xf == NULL)
-			continue;
+		if (aux2rrqqhp(b, &s1, &s2, &q1, &q2, &hp) < 0) {
+			ret = -1;
+			break;
+		}
 
-		len = xf2ssqq(xf, &s1, &s2, &q1, &q2);
-		if (len < 0)
-			continue;
+		len = strlen(s1);
+		hplen = hp ? strlen(hp) : 0;
+		hppos = b->core.l_qseq;
 
 		clean_quals(s1, q1, len, PHRED_SCALE);
 		clean_quals(s2, q2, len, PHRED_SCALE);
-
-		if (correct_s1s2(s1, q1, len, s2, q2, len,
-				bat->opt->pv_hairpin,
-				bat->opt->hlen,
-				bat->opt->pv_rhairpin,
-				bat->opt->hlen) == -1)
-			continue;
+		if (hplen)
+			correct_s1s2(s1, q1, len, s2, q2, len, hplen, hppos);
 
 		break;
 	}
@@ -242,9 +229,7 @@ scan_pairs(opt_t *opt)
 
 			for (i=0; i<n; i++) {
 				const bam_pileup1_t *p = plp + i;
-				uint8_t *xf_aux;
-				char *xf;
-				char *s1, *s2, *q1, *q2;
+				char *s1, *s2, *q1, *q2, *hp;
 				int ci, cj, qi, qj;
 				int sx;
 
@@ -254,15 +239,12 @@ scan_pairs(opt_t *opt)
 				if (bam_get_qual(p->b)[p->qpos] < opt->min_baseq)
 					continue;
 
-				xf_aux = bam_aux_get(p->b, "XF");
-				if (xf_aux == NULL)
-					continue;
-				xf = bam_aux2Z(xf_aux);
-				if (xf == NULL)
-					continue;
-
-				if (xf2ssqq(xf, &s1, &s2, &q1, &q2) < 0)
-					continue;
+				if (aux2rrqqhp(p->b, &s1, &s2, &q1, &q2, &hp) < 0) {
+					fprintf(stderr, "aux2rrqqhp:1: failed\n");
+					ret = -5;
+					bam_plp_destroy(plpiter);
+					goto err4;
+				}
 
 				if (bam_is_rev(p->b)) {
 					sx = p->b->core.l_qseq - p->qpos-1;
@@ -306,10 +288,8 @@ scan_pairs(opt_t *opt)
 		 * the reads is obtained from win[WIN_SZ], cached above.
 		 */
 		while (sam_itr_next(bat.bam_fp, bat.bam_iter, b) >= 0) {
-			uint8_t *xf_aux;
-			char *xf;
-			char *s1, *s2, *q1, *q2;
-			int len;
+			char *s1, *s2, *q1, *q2, *hp;
+			size_t len, hlen;
 			int hairpin;
 			int ci, cj, qi, qj;
 			int sx;
@@ -331,29 +311,19 @@ scan_pairs(opt_t *opt)
 			if (b->core.n_cigar > 1)
 				continue;
 
-			xf_aux = bam_aux_get(b, "XF");
-			if (xf_aux == NULL)
-				continue;
-			xf = bam_aux2Z(xf_aux);
-			if (xf == NULL)
-				continue;
+			if (aux2rrqqhp(b, &s1, &s2, &q1, &q2, &hp) < 0) {
+				fprintf(stderr, "aux2rrqqhp:2: failed\n");
+				ret = -6;
+				goto err4;
+			}
 
-			if ((len = xf2ssqq(xf, &s1, &s2, &q1, &q2)) < 0)
-				continue;
+			len = strlen(s1);
+			hlen = hp ? strlen(hp) : 0;
 
-			if (b->core.l_qseq+opt->hlen < len)
+			if (b->core.l_qseq+hlen < len)
 				hairpin = 1;
 			else
 				hairpin = 0;
-
-			/*
-			if (correct_s1s2(s1, q1, len,
-					s2, q2, len,
-					opt->pv_hairpin,
-					opt->pv_rhairpin,
-					opt->hlen) == -1)
-				continue;
-			*/
 
 			if (bam_is_rev(b)) {
 				// within the read
@@ -486,7 +456,7 @@ next_window:
 	}
 
 	ret = 0;
-
+err4:
 	bam_destroy1(b);
 	hts_idx_destroy(bat.bam_idx);
 err3:
@@ -502,9 +472,8 @@ err0:
 void
 usage(char *argv0)
 {
-	fprintf(stderr, "scan_pairs v3\n");
-	fprintf(stderr, "usage: %s [...] in.bam\n", argv0);
-	fprintf(stderr, " -p SEQ            The hairpin SEQuence\n");
+	fprintf(stderr, "scan_pairs v%s\n", FOLDREADS_VERSION);
+	fprintf(stderr, "usage: %s in.bam\n", argv0);
 	exit(1);
 }
 
@@ -513,41 +482,19 @@ main(int argc, char **argv)
 {
 	opt_t opt;
 	int c;
-	int i;
 	int ret;
 
 	memset(&opt, 0, sizeof(opt_t));
 	opt.min_mapq = 25;
 	opt.min_baseq = 10;
 	opt.metrics_fp = stdout;
-	opt.hairpin = "ACGCCGGCGGCAAGTGAAGCCGCCGGCGT";
 
-	while ((c = getopt(argc, argv, "p:")) != -1) {
+	while ((c = getopt(argc, argv, "")) != -1) {
 		switch (c) {
-			case 'p':
-				opt.hairpin = optarg;
-				for (i=0; i<strlen(opt.hairpin); i++)
-					opt.hairpin[i] = toupper(opt.hairpin[i]);
-				break;
 			default:
 				usage(argv[0]);
 		}
 	}
-
-	if (opt.hairpin == NULL) {
-		fprintf(stderr, "Error: must specify a hairpin sequence.\n");
-		usage(argv[0]);
-	}
-
-	opt.hlen = strlen(opt.hairpin);
-	if (opt.hlen < 5 || opt.hlen > 1000) {
-		fprintf(stderr, "Error: hairpin too %s (len=%zd).\n",
-				opt.hlen<5?"short":"long", opt.hlen);
-		usage(argv[0]);
-	}
-
-	opt.rhairpin = strdup(opt.hairpin);
-	revcomp(opt.rhairpin, opt.hlen);
 
 	if (argc-optind != 1) {
 		usage(argv[0]);
@@ -557,17 +504,7 @@ main(int argc, char **argv)
 
 	srand(31415);
 
-	str2pvec(opt.hairpin, opt.hlen, &opt.pv_hairpin);
-	str2pvec(opt.rhairpin, opt.hlen, &opt.pv_rhairpin);
-	if (opt.pv_hairpin == NULL || opt.pv_rhairpin == NULL) {
-		exit(1);
-	}
-
 	ret = (scan_pairs(&opt) != 0);
-
-	free(opt.rhairpin);
-	free(opt.pv_hairpin);
-	free(opt.pv_rhairpin);
 
 	return ret;
 }
