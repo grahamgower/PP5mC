@@ -495,6 +495,6 @@ if __name__ == "__main__":
         deplist = dedup_jobs[sample]
         merge_libs_jobid = do_merge_libs(p, rd, filesize, sample, lib_list, sl_info, refid, deplist)
         realign_jobid = do_indel_realign(p, rd, filesize, sample, refid, ref, merge_libs_jobid)
-        #mark5mC_jobid = do_mark_5mC(p, rd, filesize, sample, refid, ref, realign_jobid)
+        mark5mC_jobid = do_mark_5mC(p, rd, filesize, sample, refid, ref, realign_jobid)
 
     p.print_graph()
