@@ -141,11 +141,11 @@ def do_map(p, rd, jobsize, sample, lib, runid, refid, ref, deps):
 def bam2rgids(bam):
     ids = set()
     hdr = subprocess.check_output(["samtools", "view", "-H", bam])
-    for hline in hdr:
+    for hline in hdr.split("\n"):
         if not hline.startswith("@RG"):
             continue
-        rgfields = hline.split("\t")
-        for tag, val in rgfields.split(":"):
+        for field in hline.split("\t")[1:]:
+            tag, val = field.split(":", 1)
             if tag == "ID":
                 ids.add(val)
                 break
