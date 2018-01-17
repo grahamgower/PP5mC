@@ -3,16 +3,16 @@ CFLAGS=-I$(HTSDIR) -Wall -g -O2
 LDFLAGS=-L$(HTSDIR)
 LIBS= #-Wl,-Bstatic -lhts -lz -Wl,-Bdynamic -lm
 
-all: foldreads mark_5mC scan_pairs
+all: foldreads mark5mC scanbp
 
 foldreads: foldreads.o fold.o fit_lognorm.o kmath.o
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS) -Wl,-Bstatic -lz -Wl,-Bdynamic -lm
 
-mark_5mC: mark_5mC.o fold.o aux.o
+mark5mC: mark5mC.o fold.o aux.o
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS) -Wl,-Bstatic -lhts -lz -Wl,-Bdynamic -pthread -lm
 
-scan_pairs: scan_pairs.o fold.o aux.o
+scanbp: scanbp.o fold.o aux.o
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS) -Wl,-Bstatic -lhts -lz -Wl,-Bdynamic -pthread -lm
 
 clean:
-	rm -f *.o foldreads mark_5mC scan_pairs
+	rm -f *.o foldreads mark5mC scanbp

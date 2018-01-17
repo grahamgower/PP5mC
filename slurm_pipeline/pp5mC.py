@@ -356,7 +356,7 @@ def do_mark_5mC(p, rd, jobsize, sample, refid, ref, deps):
     j = p.new_job("07:mark5mC:{}".format(pfx), res, force=True)
 
     j.add_cmd("rm -f {}".format(methlist))
-    cmd1 = ["mark_5mC",
+    cmd1 = ["mark5mC",
             "-5 10",
             "-3 10",
             ibam,
@@ -372,6 +372,34 @@ def do_mark_5mC(p, rd, jobsize, sample, refid, ref, deps):
             "--gzip",
             methlist,
             pfx]
+    j.add_cmd(" \\\n\t".join(cmd2))
+
+    return j.sub(afterok=deps)
+
+
+def do_scanbp(p, rd, jobsize, sample, refid, ref, deps):
+    pfx = "{}.{}".format(sample, refid)
+    ibam = "{}.bam".format(pfx)
+    pairs_txt = "{}.pairs.txt".format(pfx)
+    paris_pdf = "{}.pairs.pdf".format(pfx)
+
+    if os.path.exists(pairs_txt) and os.path.exists(pairs_pdf):
+        # all files present, nothing to do
+        return None
+
+    res = Resource(rd["08:scanbp"], jobsize)
+    j = p.new_job("08:scanbp:{}".format(pfx), res, force=True)
+
+    j.add_cmd("rm -f {} {}".format(pairs_txt, pairs_pdf))
+    cmd1 = ["scanbp",
+            ibam,
+            "> {}".format(pairs_txt)]
+    j.add_cmd(" \\\n\t".join(cmd1))
+
+    cmd2 = ["plot_nt_pairing.py",
+            "--title {}".format(pfx),
+            pairs_txt,
+            pairs_pdf]
     j.add_cmd(" \\\n\t".join(cmd2))
 
     return j.sub(afterok=deps)
@@ -496,5 +524,6 @@ if __name__ == "__main__":
         merge_libs_jobid = do_merge_libs(p, rd, filesize, sample, lib_list, sl_info, refid, deplist)
         realign_jobid = do_indel_realign(p, rd, filesize, sample, refid, ref, merge_libs_jobid)
         mark5mC_jobid = do_mark_5mC(p, rd, filesize, sample, refid, ref, realign_jobid)
+        scanbp_jobid = do_scanbp(p, rd, filesize, sample, refid, ref, realign_jobid)
 
     p.print_graph()

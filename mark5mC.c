@@ -311,7 +311,7 @@ print_m(bam_aux_t *bat, int tid, int pos, char refbase, int depth, int C, int mC
 }
 
 int
-mark_5mC(opt_t *opt)
+mark5mC(opt_t *opt)
 {
 	bam_aux_t bat;
 	bam_plp_t plpiter;
@@ -492,7 +492,7 @@ err0:
 void
 usage(char *argv0, opt_t *opt)
 {
-	fprintf(stderr, "mark_5mC v%s\n\n", FOLDREADS_VERSION);
+	fprintf(stderr, "mark5mC v%s\n\n", FOLDREADS_VERSION);
 	fprintf(stderr, " Print the methylation status of cytosines in CpG/CHG/CHH contexts,\n"
 			" where context is determined from the reference sequence.\n\n");
 
@@ -563,7 +563,7 @@ main(int argc, char **argv)
 	opt.bam_fn = argv[optind];
 	opt.fasta_fn = argv[optind+1];
 
-	ret = (mark_5mC(&opt) != 0);
+	ret = (mark5mC(&opt) != 0);
 
 	return ret;
 }

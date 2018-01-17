@@ -146,7 +146,7 @@ wcache_select(uint8_t *win, uint16_t *win_dp, int wi)
 }
 
 int
-scan_pairs(opt_t *opt)
+scanbp(opt_t *opt)
 {
 	bam_aux_t bat;
 	bam_plp_t plpiter;
@@ -472,7 +472,7 @@ err0:
 void
 usage(char *argv0)
 {
-	fprintf(stderr, "scan_pairs v%s\n", FOLDREADS_VERSION);
+	fprintf(stderr, "scanbp v%s\n", FOLDREADS_VERSION);
 	fprintf(stderr, "usage: %s in.bam\n", argv0);
 	exit(1);
 }
@@ -504,7 +504,7 @@ main(int argc, char **argv)
 
 	srand(31415);
 
-	ret = (scan_pairs(&opt) != 0);
+	ret = (scanbp(&opt) != 0);
 
 	return ret;
 }
