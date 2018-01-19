@@ -1,0 +1,50 @@
+{
+    "queue": "batch",
+    "resources": {
+	    "01:fold": {"_mem":"16M", "_cpus":1, "secs":1},
+            "02:map": {"_mem":"16G", "_cpus":4, "secs":5},
+            "03:mergeruns": {"_mem":"128M", "_cpus":1, "secs":1},
+            "04:dedup": {"_mem":"128M", "_cpus":1, "secs":0.8},
+            "05:mergelibs": {"_mem":"128M", "_cpus":1, "secs":1},
+            "06:realign1": {"_mem":"12G", "_cpus":4, "secs":1},
+            "06:realign2": {"_mem":"3G", "_cpus":1, "secs":1},
+            "06:realign3": {"_mem":"128M", "_cpus":1, "secs":1},
+            "07:mark5mC": {"_mem":"256M", "_cpus":1, "secs":1},
+            "08:scanbp": {"_mem":"512M", "_cpus":1, "secs":1},
+            "09:flagstat": {"_mem":"256M", "_cpus":1, "secs":1},
+            "10:stats": {"_mem":"512M", "_cpus":1, "secs":1},
+            "11:bedcov": {"_mem":"512M", "_cpus":1, "secs":1}
+    },
+    "refs": {
+        "UMD311": "/data/acad/Refs/Bos_taurus/UMD_3.1.1/UMD311.fasta"
+    },
+    "prefix": "/fast/users/a1185467/fold-bovids/test2/data",
+    "samples": {
+        "A16119-AncPET27k": {
+            "MCS45-04HI": {
+                "170825_L001": [
+                    "MCS45_04HI_HYMHLBGX2_ACAGTG_L001_R1.fastq.gz",
+                    "MCS45_04HI_HYMHLBGX2_ACAGTG_L001_R2.fastq.gz"
+                ],
+                "170825_L002": [
+                    "MCS45_04HI_HYMHLBGX2_ACAGTG_L002_R1.fastq.gz",
+                    "MCS45_04HI_HYMHLBGX2_ACAGTG_L002_R2.fastq.gz"
+                ]
+            },
+            "MCS45-04LO": {
+                "170823_L001": [
+                    "MCS45_04LO_HNCVHAFXX_ACAGTG_L001_R1.fastq.gz",
+                    "MCS45_04LO_HNCVHAFXX_ACAGTG_L001_R2.fastq.gz"
+                ]
+            }
+        },
+        "A16132-AncPET50k": {
+            "MCS45-05HI": {
+                "170825_L001": [
+                    "MCS45_05HI_HYMHLBGX2_GCCAAT_L001_R1.fastq.gz",
+                    "MCS45_05HI_HYMHLBGX2_GCCAAT_L001_R2.fastq.gz"
+                ]
+            }
+        }
+    }
+}
