@@ -159,7 +159,7 @@ def do_merge_runs(p, rd, jobsize, sample, lib, runid_list, refid, deps):
             hdr_rgs = bam2rgids(obam)
             if hdr_rgs == exp_rgs:
                 # nothing to do
-                return None
+                return None, obam
 
     if len(runid_list) == 1:
         # nothing to merge, just symlink
@@ -170,7 +170,7 @@ def do_merge_runs(p, rd, jobsize, sample, lib, runid_list, refid, deps):
         os.symlink(rbam, obam)
         os.symlink(rbai, obai)
         # pass through dependencies
-        return deps
+        return deps, obam
 
     # merge list
     ibamlist = []
@@ -189,8 +189,9 @@ def do_merge_runs(p, rd, jobsize, sample, lib, runid_list, refid, deps):
     j.add_cmd(" \\\n\t".join(merge_cmd))
 
     j.add_cmd("samtools index {}".format(obam))
+    jobid = j.sub(afterok=deps)
 
-    return j.sub(afterok=deps)
+    return jobid, obam
 
 def do_dedup(p, rd, jobsize, sample, lib, refid, deps):
     odir = "{}/{}".format(sample, lib)
@@ -204,7 +205,7 @@ def do_dedup(p, rd, jobsize, sample, lib, refid, deps):
         ret = subprocess.call(["samtools", "quickcheck", obam])
         if ret == 0:
             # nothing to do
-            return None
+            return None, obam
 
     res = Resource(rd["04:dedup"], jobsize)
     j = p.new_job("04:dedup:{}".format(pfx), res, force=True)
@@ -218,8 +219,10 @@ def do_dedup(p, rd, jobsize, sample, lib, refid, deps):
     j.add_cmd(" \\\n\t".join(dedup_cmd))
 
     j.add_cmd("samtools index {}".format(obam))
+    jobid =  j.sub(afterok=deps)
 
-    return j.sub(afterok=deps)
+    return jobid, obam
+
 
 def do_merge_libs(p, rd, jobsize, sample, lib_list, sl_info, refid, deps):
     odir = sample
@@ -239,7 +242,7 @@ def do_merge_libs(p, rd, jobsize, sample, lib_list, sl_info, refid, deps):
             hdr_rgs = bam2rgids(obam)
             if hdr_rgs == exp_rgs:
                 # nothing to do
-                return None
+                return None, obam
 
     if len(lib_list) == 1:
         # nothing to merge, just symlink
@@ -250,7 +253,7 @@ def do_merge_libs(p, rd, jobsize, sample, lib_list, sl_info, refid, deps):
         os.symlink(lbam, obam)
         os.symlink(lbai, obai)
         # pass through dependencies
-        return deps
+        return deps, obam
 
     # merge list
     ibamlist = []
@@ -270,7 +273,9 @@ def do_merge_libs(p, rd, jobsize, sample, lib_list, sl_info, refid, deps):
 
     j.add_cmd("samtools index {}".format(obam))
 
-    return j.sub(afterok=deps)
+    jobid = j.sub(afterok=deps)
+
+    return jobid, obam
 
 def do_indel_realign(p, rd, jobsize, sample, refid, ref, deps):
     odir = sample
@@ -287,7 +292,7 @@ def do_indel_realign(p, rd, jobsize, sample, refid, ref, deps):
         ret = subprocess.call(["samtools", "quickcheck", obam2])
         if ret == 0:
             # nothing to do
-            return None
+            return None, obam2
 
     # train realigner
     res1 = Resource(rd["06:realign1"], jobsize)
@@ -333,7 +338,7 @@ def do_indel_realign(p, rd, jobsize, sample, refid, ref, deps):
     j3.add_cmd("samtools index {}".format(obam2))
     stage3 = j3.sub(afterok=stage2)
 
-    return stage3
+    return stage3, obam2
 
 def do_mark_5mC(p, rd, jobsize, sample, refid, ref, deps):
     pfx = "{}.{}".format(sample, refid)
@@ -376,12 +381,11 @@ def do_mark_5mC(p, rd, jobsize, sample, refid, ref, deps):
 
     return j.sub(afterok=deps)
 
-
 def do_scanbp(p, rd, jobsize, sample, refid, ref, deps):
     pfx = "{}.{}".format(sample, refid)
     ibam = "{}.bam".format(pfx)
     pairs_txt = "{}.pairs.txt".format(pfx)
-    paris_pdf = "{}.pairs.pdf".format(pfx)
+    pairs_pdf = "{}.pairs.pdf".format(pfx)
 
     if os.path.exists(pairs_txt) and os.path.exists(pairs_pdf):
         # all files present, nothing to do
@@ -404,9 +408,64 @@ def do_scanbp(p, rd, jobsize, sample, refid, ref, deps):
 
     return j.sub(afterok=deps)
 
+def do_samtools_flagstat(p, rd, jobsize, pfx, bam, deps):
+    flagstat = "{}.flagstat.txt".format(bam)
+
+    if os.path.exists(flagstat):
+        return None
+
+    res = Resource(rd["09:flagstat"], jobsize)
+    j = p.new_job("09:flagstat:{}".format(pfx), res, force=True)
+
+    j.add_cmd("samtools flagstat {} > {}".format(bam, flagstat))
+
+    return j.sub(afterok=deps)
+
+def do_samtools_stats(p, rd, jobsize, pfx, bam, deps):
+    stats_mt = "{}.stats.MT.txt".format(bam)
+    stats_aut = "{}.stats.Aut.txt".format(bam)
+    stats_X = "{}.stats.chrX.txt".format(bam)
+
+    if os.path.exists(stats_mt) and os.path.exists(stats_aut) and os.path.exists(stats_X):
+        return None
+
+    res = Resource(rd["10:stats"], jobsize)
+    j = p.new_job("10:stats:{}".format(pfx), res, force=True)
+
+    chrmax = 50
+    autlist = [str(c) for c in range(1,chrmax)] \
+                + ["chr{}".format(c) for c in range(1,chrmax)] \
+                + ["Chr{}".format(c) for c in range(1,chrmax)]
+    autstr = " ".join(autlist)
+
+    # 'samtools stats' doesn't fail if you specify a non-existant chr name,
+    # so we try multiple common names in each case.
+    j.add_cmd("samtools stats {} MT Mt M > {}".format(bam, stats_mt))
+    j.add_cmd("samtools stats {} {} > {}".format(bam, autstr, stats_aut))
+    j.add_cmd("samtools stats {} X chrX ChrX > {}".format(bam, stats_X))
+
+    return j.sub(afterok=deps)
+
+def do_samtools_bedcov(p, rd, jobsize, pfx, ref_fa, bam, deps):
+    fai = "{}.fai".format(ref_fa)
+    bed = "{}.bed.tmp".format(bam)
+    bedcov = "{}.bedcov.txt".format(bam)
+
+    if os.path.exists(bedcov):
+        return None
+
+    res = Resource(rd["11:bedcov"], jobsize)
+    j = p.new_job("11:bedcov:{}".format(pfx), res, force=True)
+
+    j.add_cmd("awk 'BEGIN {OFS=\"\t\"} {print $1, 0, $2}' {} > {}".format(fai, bed))
+    j.add_cmd("samtools bedcov {} {} > {}".format(bed, bam, bedcov))
+    j.add_cleanup_cmd = "rm -f {}".format(bed)
+
+    return j.sub(afterok=deps)
+
 def parse_args():
     import argparse
-    parser = argparse.ArgumentParser(description="Pre-process hairpin-ligated bisulfit-treated sequencing data")
+    parser = argparse.ArgumentParser(description="Pre-process hairpin-ligated bisulfite-treated sequencing data")
     parser.add_argument("--dryrun", action="store_true", help="don't submit jobs to the queue")
     parser.add_argument("--email", type=str, help="email address for Slurm to send failure messages")
     parser.add_argument("config_fn", metavar="config.json", help="config file for pipeline run")
@@ -511,18 +570,24 @@ if __name__ == "__main__":
     # tasks per library
     dedup_jobs = collections.defaultdict(list)
     for (sample, lib), runid_list in sl_info.iteritems():
+        pfx = "{}_{}.{}".format(sample, lib, refid)
         filesize = sl_size[(sample,lib)]
         deplist = map_jobs[(sample,lib,refid)]
-        merge_runs_jobid = do_merge_runs(p, rd, filesize, sample, lib, runid_list, refid, deplist)
-        dedup_jobid = do_dedup(p, rd, filesize, sample, lib, refid, merge_runs_jobid)
+        merge_runs_jobid, raw_bam = do_merge_runs(p, rd, filesize, sample, lib, runid_list, refid, deplist)
+        flagstat1_jobid = do_samtools_flagstat(p, rd, filesize, pfx+":raw", raw_bam, merge_runs_jobid)
+        dedup_jobid, dedup_bam = do_dedup(p, rd, filesize, sample, lib, refid, merge_runs_jobid)
+        flagstat2_jobid = do_samtools_flagstat(p, rd, filesize, pfx+":dedup", dedup_bam, dedup_jobid)
         dedup_jobs[sample].append(dedup_jobid)
 
     # tasks per sample
     for sample, lib_list in s_info.iteritems():
+        pfx = "{}.{}".format(sample, refid)
         filesize = s_size[sample]
         deplist = dedup_jobs[sample]
-        merge_libs_jobid = do_merge_libs(p, rd, filesize, sample, lib_list, sl_info, refid, deplist)
-        realign_jobid = do_indel_realign(p, rd, filesize, sample, refid, ref, merge_libs_jobid)
+        merge_libs_jobid, _ = do_merge_libs(p, rd, filesize, sample, lib_list, sl_info, refid, deplist)
+        realign_jobid, realigned_bam = do_indel_realign(p, rd, filesize, sample, refid, ref, merge_libs_jobid)
+
+        stats_jobid = do_samtools_stats(p, rd, filesize, pfx, realigned_bam, realign_jobid)
         mark5mC_jobid = do_mark_5mC(p, rd, filesize, sample, refid, ref, realign_jobid)
         scanbp_jobid = do_scanbp(p, rd, filesize, sample, refid, ref, realign_jobid)
 
