@@ -16,7 +16,10 @@ Pipeline stages:
 6.  Realign around indels (1. `$gatk -T RealignerTargetCreator`,
     2. `$gatk -T IndelRealigner`, 3. `samtools calmd`).
 7.  Mark C/5mC states for each locus, from the pileup (`PP5mC/mark_5mC`).
-8.  Summary statistics and plots.
+8.  Summary statistics and plots (`PP5mC/scanbp`).
+9.  `samtools flagstat`
+10. `samtools stat`
+10. `samtools bedcov`
 
 The pipeline does not do variant calling.
 
@@ -130,15 +133,19 @@ If none is specified, the default queue will be used.
 ```
     "queue": "batch",
     "resources": {
-	    "01:fold": {"_mem":"16M", "_cpus":1, "_mins":10},
-	    "02:map": {"_mem":"6G", "_cpus":4, "_mins":10},
-	    "03:mergeruns": {"_mem":"128M", "_cpus":1, "_mins":10},
-	    "04:dedup": {"_mem":"128M", "_cpus":1, "_mins":10},
-	    "05:mergelibs": {"_mem":"128M", "_cpus":1, "_mins":10},
-	    "06:realign1": {"_mem":"3G", "_cpus":2, "_mins":10},
-	    "06:realign2": {"_mem":"3G", "_cpus":1, "_mins":10},
-	    "06:realign3": {"_mem":"128M", "_cpus":1, "_mins":10},
-	    "07:mark5mC": {"_mem":"128M", "_cpus":1, "_mins":10}
+	    "01:fold": {"_mem":"16M", "_cpus":1, "secs":1},
+            "02:map": {"_mem":"16G", "_cpus":4, "secs":5},
+            "03:mergeruns": {"_mem":"128M", "_cpus":1, "secs":1},
+            "04:dedup": {"_mem":"128M", "_cpus":1, "secs":1},
+            "05:mergelibs": {"_mem":"128M", "_cpus":1, "secs":1},
+            "06:realign1": {"_mem":"12G", "_cpus":4, "secs":1},
+            "06:realign2": {"_mem":"3G", "_cpus":1, "secs":1},
+            "06:realign3": {"_mem":"128M", "_cpus":1, "secs":1},
+            "07:mark5mC": {"_mem":"256M", "_cpus":1, "secs":1},
+            "08:scanbp": {"_mem":"512M", "_cpus":1, "secs":1},
+            "09:flagstat": {"_mem":"256M", "_cpus":1, "secs":1},
+            "10:stats": {"_mem":"512M", "_cpus":1, "secs":1},
+            "11:bedcov": {"_mem":"512M", "_cpus":1, "secs":1}
     },
 ```
 
@@ -194,7 +201,7 @@ non-negligible memory overhead---distinct from the heap space.
 We strongly recommend limiting the maximum heap size (`-Xmx`) and the number
 of garbage collector threads (`-XX:ParallelGCThreads`).  The "_mem" resource
 object for the "06:realign1" and "06:realign2" pipeline stages should be set
-*higher* than the value specified with `-Xmx` to account the java virtual
+*higher* than the value specified with `-Xmx` to account for the java virtual
 machine overhead.  An additional 1-2 Gb ought to be sufficient, depending on
 the number of garbage collector threads.
 
