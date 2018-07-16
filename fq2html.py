@@ -2,6 +2,7 @@
 
 from __future__ import print_function
 import sys
+import math
 from collections import Counter
 
 try:
@@ -69,9 +70,23 @@ def parse_fq(filename):
     if label is not None:
         yield label, comment, "".join(seq), "".join(qual)
 
-def mmfind(needle, haystack, mm_allow=2):
+# Inverse poisson CDF, stolen from bwa: bwtaln.c
+def bwa_cal_maxdiff(l, err=0.01, thres=0.04, maxlen=1000):
+	esum = elambda = math.exp(-l * err)
+	y = 1.0
+	k = x = 1
+        while (k < maxlen):
+		y *= l * err
+		x *= k
+		esum += elambda * y / x
+                if (1.0 - esum < thres):
+                    return k
+                k += 1
+	return 2;
+
+def mmfind(needle, haystack, mm_allow=1, start=0):
     nlen = len(needle)
-    for i in range(0, len(haystack)-nlen):
+    for i in range(start, len(haystack)-nlen):
         mm = 0
         for h, n in zip(haystack[i:i+nlen], needle):
             if h != n:
@@ -89,32 +104,68 @@ def revcomp(seq):
     revmap = {"A":"T", "C":"G", "G":"C", "T":"A", "N":"N"}
     return "".join((revmap[s] for s in reversed(seq)))
 
+def parse_args():
+    import argparse
+    parser = argparse.ArgumentParser(description="HTMLify fastq files to troubleshoot hairpin-ligated bisulfite-treated files")
+    parser.add_argument("-n", "--nseqs", type=int, default=1000, help="only output this many sequences [(%default)s]")
+    parser.add_argument("-p", "--hairpin", action="append", help="hairpin sequence(s)")
+    parser.add_argument("--latex", action="store_true", default=False, help="LaTeX output [%(default)s]")
+    parser.add_argument("fq1", metavar="f1.fq", help="fastq r1 or folded")
+    parser.add_argument("fq2", metavar="f2.fq", help="fastq r2", nargs='?', default=None)
+    args = parser.parse_args()
+
+    if args.hairpin is None:
+        args.hairpin = ["ACGCCGGCGGCAAGTGAAGCCGCCGGCGT",
+                        "ACGCCGGCGGCAAGTAAGCCGCCGGCGT",
+                        "ACGCCGGCGGCAAGTAGCCGCCGGCGT"]
+
+    args.rhairpin = [revcomp(h) for h in args.hairpin]
+
+    return args
+
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("usage: {} folded.fq [hairpin]".format(sys.argv[0]), file=sys.stderr)
-        exit(1)
-
-    folded_fn = sys.argv[1]
-
-    if len(sys.argv) == 3:
-        hairpin = sys.argv[2]
-    else:
-        hairpin = "ACGCCGGCGGCAAGTGAAGCCGCCGGCGT"
+    args = parse_args()
 
 #    p5 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC"
 #    p7 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTA"
-    p5 = p7 = "AGATCGGAAGAGC"
+    p5 = p7 = "AGATCGGAA"
 
-    rhairpin = revcomp(hairpin)
+    yy_maxdiff = bwa_cal_maxdiff(len(p5))
+    hp_maxdiff = [bwa_cal_maxdiff(len(s)) for s in args.hairpin]
 
-    print("""
+    if args.latex:
+        print("""
+\\documentclass[a4paper,10pt]{article}
+\\usepackage[landscape,margin=5mm]{geometry}
+\\usepackage{xcolor}
+
+\\definecolor{bs}{RGB}{0, 0, 255} % blue
+\\definecolor{nobs}{RGB}{255, 0, 0} % red
+\\definecolor{mismatch}{RGB}{255, 0, 255} % magenta
+\\definecolor{hairpin}{RGB}{255, 255, 0} % yellow
+\\definecolor{yadapter}{RGB}{0, 255, 255} % cyan
+
+\\setlength{\parindent}{0pt}
+
+\\begin{document}
+""")
+        def f(s, cls):
+            if cls is None:
+                return s
+            elif cls in ("hairpin", "yadapter"):
+                # set as highlight colour
+                return "{{\\begingroup\\setlength{{\\fboxsep}}{{0pt}}\\colorbox{{{}}}{{{}\\/}}\\endgroup}}".format(cls, s)
+            else:
+                return "{{\\color{{{}}}{}}}".format(cls, s)
+    else:
+        print("""
 <!DOCTYPE html>
 <html>
 <head>
 <style>
 .bs {color:blue}
 .nobs {color:red}
-.mismatch {color:purple}
+.mismatch {color:magenta}
 .hairpin {color:orange}
 .yadapter {color:cyan}
 </style>
@@ -122,11 +173,12 @@ if __name__ == "__main__":
 <body>
 <h2>
 """)
-    def f(s, cls):
-        if cls is None:
-            return s
-        else:
-            return "<font class={}>{}</font>".format(cls, s)
+        def f(s, cls):
+            if cls is None:
+                return s
+            else:
+                return "<font class={}>{}</font>".format(cls, s)            
+
 
     def g(slist):
         sl = []
@@ -142,26 +194,80 @@ if __name__ == "__main__":
             out.append(f("".join(sl), last))
         return "".join(out)
 
-    for seqno, (label, comment, ss, qq) in enumerate(parse_fq(folded_fn), 1):
+    fq1 = parse_fq(args.fq1)
+    fq2 = None
+    if args.fq2:
+        fq2 = parse_fq(args.fq2)
+        ss = qq = None
 
-        if seqno > 1000:
+    seqno = 0
+
+    while True:
+        seqno += 1
+
+        if fq2 is None:
+            label, comment, ss, qq = next(fq1)
+            ss1, ss2, qq1, qq2, hp = comment2ssqq(comment)
+            hlen = len(hp)
+
+            hpi = rhpi = len(ss)
+            p5i = p7i = 2*len(ss)+hlen
+
+            #if p5i > len(ss1):
+            #    p5i = mmfind(p5, ss1, yy_maxdiff)
+            #if p7i > len(ss1):
+            #    p7i = mmfind(p7, ss2, yy_maxdiff)
+        else:
+            label1, comment1, ss1, qq1 = next(fq1)
+            label2, comment2, ss2, qq2 = next(fq2)
+
+            if label1[-2:] in ("/1", ".1"):
+                label1 = label1[:-2]
+                label2 = label2[:-2]
+            if label1 != label2:
+                print("read name mismatch for pair {}".format(seqno), file=sys.stderr)
+                exit(1)
+
+            hpi = rhpi = -1
+            hp = ""
+
+            # look for hairpin...
+            for i, (h,rh) in enumerate(zip(args.hairpin, args.rhairpin)):
+                hpi = mmfind(h, ss1, hp_maxdiff[i])
+                rhpi = mmfind(rh, ss2, hp_maxdiff[i])
+                if hpi != -1:
+                    if rhpi == -1:
+                        rhpi = hpi
+                    hp = h
+                    break
+                if rhpi != -1:
+                    hpi = rhpi
+                    hp = h
+                    break
+
+            hlen = len(hp)
+
+            if hpi != -1:
+                p5i = mmfind(p5, ss1, yy_maxdiff, hpi+hlen)
+            else:
+                p5i = mmfind(p5, ss1, yy_maxdiff)
+
+            if rhpi != -1:
+                p7i = mmfind(p7, ss2, yy_maxdiff, rhpi+hlen)
+            else:
+                p7i = mmfind(p7, ss2, yy_maxdiff)
+
+        if seqno > args.nseqs:
             break
-
-        ss1, ss2, qq1, qq2, hp = comment2ssqq(comment)
-        hlen = len(hp)
-
-        hpi = rhpi = len(ss)
-        p5i = p7i = 2*len(ss)+hlen
-
-        if p5i > len(ss1):
-            p5i = mmfind(p5,ss1)
-        if p7i > len(ss1):
-            p7i = mmfind(p7,ss2)
 
         s1_list = []
         s2_list = []
 
-        print("<p><tt>")
+        if args.latex:
+            print("\\begin{samepage}\n{\\tt")
+        else:
+            print("<p><tt>")
+
         for i,(s1,s2,q1,q2) in enumerate(zip(ss1,ss2,qq1,qq2)):
             s1 = s1.upper()
             s2 = s2.upper()
@@ -188,13 +294,27 @@ if __name__ == "__main__":
                 s2_cls = "yadapter"
             s1_list.append((s1, s1_cls))
             s2_list.append((s2, s2_cls))
-        print("R1", g(s1_list))
-        print("</br>")
-        print("R2", g(s2_list))
-        print("</br>")
-        print("FS ", ss)
-        print("</br>")
-        print("FQ ", qq)
-        print("</tt></p>")
 
-    print("</h2></html></body>")
+        if args.latex:
+            print("R1", g(s1_list), "\\\\")
+            if ss is None:
+                print("R2", g(s2_list))
+            else:
+                print("R2", g(s2_list), "\\\\")
+                print("FS ", ss, "\\\\")
+                qq = qq.replace("&", "\\&")
+                qq = qq.replace("$", "\\$")
+                print("FQ ", qq)
+            print("}\\vskip\\baselineskip \\end{samepage}\n")
+        else:
+            print("R1", g(s1_list), "</br>")
+            print("R2", g(s2_list), "</br>")
+            if ss is not None:
+                print("FS ", ss, "</br>")
+                print("FQ ", qq)
+            print("</tt></p>")
+
+    if args.latex:
+        print("\n\\end{document}")
+    else:
+        print("</h2></html></body>")
