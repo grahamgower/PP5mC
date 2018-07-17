@@ -126,8 +126,8 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
-#    p5 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC"
-#    p7 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTA"
+#    p5 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTA"
+#    p7 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC"
     p5 = p7 = "AGATCGGAA"
 
     yy_maxdiff = bwa_cal_maxdiff(len(p5))

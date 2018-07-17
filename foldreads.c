@@ -546,8 +546,8 @@ usage(char *argv0)
 	fprintf(stderr, " -p SEQ            The hairpin SEQuence [ACGCCGGCGGCAAGTGAAGCCGCCGGCGT]\n");
 	fprintf(stderr, " -1 IN1.FQ[.GZ]    R1 fastq input file\n");
 	fprintf(stderr, " -2 IN2.FQ[.GZ]    R2 fastq input file\n");
-	fprintf(stderr, " -T SEQ            Adapter SEQuence trailing R1 (Top) []\n");
-	fprintf(stderr, " -B SEQ            Adapter SEQuence trailing R2 (Bottom) []\n");
+	fprintf(stderr, " -T SEQ            Adapter SEQuence trailing R1 (p7) []\n");
+	fprintf(stderr, " -B SEQ            Adapter SEQuence trailing R2 (p5) []\n");
 	exit(-1);
 }
 
@@ -564,7 +564,9 @@ main(int argc, char **argv)
 	char *a1, *a2;
 
 	// Y-adapters
+	// p7, might read into this at end of r1
 	a1 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCACNNNNNNATCTCGTATGCCGTCTTCTGCTTG";
+	// p5, might read into this at end of r2
 	a2 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT";
 
 	memset(&opt, '\0', sizeof(opt_t));
