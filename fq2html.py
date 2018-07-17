@@ -71,7 +71,7 @@ def parse_fq(filename):
         yield label, comment, "".join(seq), "".join(qual)
 
 # Inverse poisson CDF, stolen from bwa: bwtaln.c
-def bwa_cal_maxdiff(l, err=0.01, thres=0.04, maxlen=1000):
+def bwa_cal_maxdiff(l, err=0.02, thres=0.01, maxlen=1000):
 	esum = elambda = math.exp(-l * err)
 	y = 1.0
 	k = x = 1
@@ -84,9 +84,11 @@ def bwa_cal_maxdiff(l, err=0.01, thres=0.04, maxlen=1000):
                 k += 1
 	return 2;
 
-def mmfind(needle, haystack, mm_allow=1, start=0):
+def mmfind(needle, haystack, mm_allow=1, start=0, min_matches=-1):
     nlen = len(needle)
-    for i in range(start, len(haystack)-nlen):
+    if min_matches == -1:
+        min_matches = nlen
+    for i in range(start, len(haystack)-min_matches):
         mm = 0
         for h, n in zip(haystack[i:i+nlen], needle):
             if h != n:
@@ -110,6 +112,8 @@ def parse_args():
     parser.add_argument("-n", "--nseqs", type=int, default=1000, help="only output this many sequences [(%default)s]")
     parser.add_argument("-p", "--hairpin", action="append", help="hairpin sequence(s)")
     parser.add_argument("--latex", action="store_true", default=False, help="LaTeX output [%(default)s]")
+    parser.add_argument("-i", "--interleaved", action="store_true", default=False, help="R1/R2 are interleaved in one fastq")
+    parser.add_argument("-m", "--adapter-matchlen", type=int, default=9, help="min number of bases to match hairpin/adapter at end of read")
     parser.add_argument("fq1", metavar="f1.fq", help="fastq r1 or folded")
     parser.add_argument("fq2", metavar="f2.fq", help="fastq r2", nargs='?', default=None)
     args = parser.parse_args()
@@ -126,12 +130,12 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
-#    p5 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTA"
-#    p7 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC"
-    p5 = p7 = "AGATCGGAA"
+    p5 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTA" #[:args.adapter_matchlen]
+    p7 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC" #[:args.adapter_matchlen]
 
     yy_maxdiff = bwa_cal_maxdiff(len(p5))
     hp_maxdiff = [bwa_cal_maxdiff(len(s)) for s in args.hairpin]
+    #print(yy_maxdiff, hp_maxdiff, file=sys.stderr)
 
     if args.latex:
         print("""
@@ -194,11 +198,13 @@ if __name__ == "__main__":
             out.append(f("".join(sl), last))
         return "".join(out)
 
+    ss = qq = None
     fq1 = parse_fq(args.fq1)
     fq2 = None
-    if args.fq2:
+    if args.interleaved:
+        fq2 = fq1
+    elif args.fq2:
         fq2 = parse_fq(args.fq2)
-        ss = qq = None
 
     seqno = 0
 
@@ -206,20 +212,23 @@ if __name__ == "__main__":
         seqno += 1
 
         if fq2 is None:
-            label, comment, ss, qq = next(fq1)
+            # folded reads
+            try:
+                label, comment, ss, qq = next(fq1)
+            except StopIteration:
+                break
             ss1, ss2, qq1, qq2, hp = comment2ssqq(comment)
             hlen = len(hp)
 
             hpi = rhpi = len(ss)
             p5i = p7i = 2*len(ss)+hlen
-
-            #if p5i > len(ss1):
-            #    p5i = mmfind(p5, ss1, yy_maxdiff)
-            #if p7i > len(ss1):
-            #    p7i = mmfind(p7, ss2, yy_maxdiff)
         else:
-            label1, comment1, ss1, qq1 = next(fq1)
-            label2, comment2, ss2, qq2 = next(fq2)
+            # unfolded paired-end reads
+            try:
+                label1, comment1, ss1, qq1 = next(fq1)
+                label2, comment2, ss2, qq2 = next(fq2)
+            except StopIteration:
+                break
 
             if label1[-2:] in ("/1", ".1"):
                 label1 = label1[:-2]
@@ -228,34 +237,34 @@ if __name__ == "__main__":
                 print("read name mismatch for pair {}".format(seqno), file=sys.stderr)
                 exit(1)
 
+            label = label1
             hpi = rhpi = -1
             hp = ""
 
-            # look for hairpin...
+            # look for a hairpin
             for i, (h,rh) in enumerate(zip(args.hairpin, args.rhairpin)):
-                hpi = mmfind(h, ss1, hp_maxdiff[i])
-                rhpi = mmfind(rh, ss2, hp_maxdiff[i])
+                hpi = mmfind(h, ss1, hp_maxdiff[i], min_matches=args.adapter_matchlen)
+                rhpi = mmfind(rh, ss2, hp_maxdiff[i], min_matches=args.adapter_matchlen)
+                #print(label, h, hpi, file=sys.stderr)
                 if hpi != -1:
-                    if rhpi == -1:
-                        rhpi = hpi
                     hp = h
                     break
                 if rhpi != -1:
-                    hpi = rhpi
                     hp = h
                     break
 
             hlen = len(hp)
 
             if hpi != -1:
-                p5i = mmfind(p5, ss1, yy_maxdiff, hpi+hlen)
+                p7i = mmfind(p7, ss1, yy_maxdiff, hpi+hlen, min_matches=args.adapter_matchlen)
             else:
-                p5i = mmfind(p5, ss1, yy_maxdiff)
+                p7i = mmfind(p7, ss1, yy_maxdiff, min_matches=args.adapter_matchlen)
 
             if rhpi != -1:
-                p7i = mmfind(p7, ss2, yy_maxdiff, rhpi+hlen)
+                p5i = mmfind(p5, ss2, yy_maxdiff, rhpi+hlen, min_matches=args.adapter_matchlen)
             else:
-                p7i = mmfind(p7, ss2, yy_maxdiff)
+                p5i = mmfind(p5, ss2, yy_maxdiff, min_matches=args.adapter_matchlen)
+
 
         if seqno > args.nseqs:
             break
@@ -274,28 +283,39 @@ if __name__ == "__main__":
             q1 = ord(q1)-33
             q2 = ord(q2)-33
             s1_cls = s2_cls = None
+
             if s1 == s2:
                 if s1 == 'C' or s1 == 'G':
                     s1_cls = s2_cls = "nobs"
             elif (s1,s2) in [('T','C'), ('G','A')]:
                 s1_cls = s2_cls = "bs"
             else:
-                if q1<=q2:
-                    s1_cls = "mismatch"
-                if q1>=q2:
-                    s2_cls = "mismatch"
+                s1_cls = s2_cls = "mismatch"
+
             if hpi != -1 and i>=hpi and i<hpi+hlen:
                 s1_cls = "hairpin"
             if rhpi != -1 and i>=rhpi and i<rhpi+hlen:
                 s2_cls = "hairpin"
-            if p5i != -1 and i>=p5i:
-                s1_cls = "yadapter"
             if p7i != -1 and i>=p7i:
+                s1_cls = "yadapter"
+            if p5i != -1 and i>=p5i:
                 s2_cls = "yadapter"
+
+            if q1 <= 20:
+                if args.latex:
+                    s1 = "{{\\underline{{{}}}\\/}}".format(s1)
+                else:
+                    s1 = "<u>{}</u>".format(s1)
+            if q2 <= 20:
+                if args.latex:
+                    s2 = "{{\\underline{{{}}}\\/}}".format(s2)
+                else:
+                    s2 = "<u>{}</u>".format(s2)
             s1_list.append((s1, s1_cls))
             s2_list.append((s2, s2_cls))
 
         if args.latex:
+            print(label, "\\\\")
             print("R1", g(s1_list), "\\\\")
             if ss is None:
                 print("R2", g(s2_list))
@@ -307,6 +327,7 @@ if __name__ == "__main__":
                 print("FQ ", qq)
             print("}\\vskip\\baselineskip \\end{samepage}\n")
         else:
+            print(label, "</br>")
             print("R1", g(s1_list), "</br>")
             print("R2", g(s2_list), "</br>")
             if ss is not None:
