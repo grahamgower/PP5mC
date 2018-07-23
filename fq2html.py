@@ -39,13 +39,13 @@ def parse_fq(filename):
         xopen = open
 
     with xopen(filename) as f:
-        for line in f:
+        for lineno, line in enumerate(f):
             line = line.rstrip("\r\n")
             if len(line) == 0:
                 continue
 
             # fastq
-            if line[0] == "@":
+            if lineno%4 == 0 and line[0] == "@":
                 if label is not None:
                     yield label, comment, "".join(seq), "".join(qual)
                 state = 1
@@ -170,8 +170,8 @@ if __name__ == "__main__":
 .bs {color:blue}
 .nobs {color:red}
 .mismatch {color:magenta}
-.hairpin {color:orange}
-.yadapter {color:cyan}
+.hairpin {background-color:yellow}
+.yadapter {background-color:cyan}
 </style>
 </head>
 <body>
@@ -234,7 +234,7 @@ if __name__ == "__main__":
                 label1 = label1[:-2]
                 label2 = label2[:-2]
             if label1 != label2:
-                print("read name mismatch for pair {}".format(seqno), file=sys.stderr)
+                print("read name mismatch for pair {}: {} and {}".format(seqno, label1, label2), file=sys.stderr)
                 exit(1)
 
             label = label1
