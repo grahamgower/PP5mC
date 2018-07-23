@@ -44,8 +44,12 @@ typedef struct {
 
 	char *oprefix;
 
-	int hp; // simulate hairpin data?
-	int pal; // simulate palindromes?
+#define MOL_BSSEQ	0
+#define MOL_HAIRPIN	1
+#define MOL_PAL_STAR	2
+#define MOL_PAL_MODHP	3
+	int mol_type;
+
 	char *hairpin, *rhairpin; // hairpin and reverse complement
 	char *a1, *a2; // Y adapter sequences
 	size_t hlen, alen; // length of hairpin and Y adapters
@@ -182,14 +186,13 @@ err0:
  * ====s1====---loop---====s2=====---y-adapter---
  * s1 and s2 are reverse complements, like for proper hairpin molecules,
  * but the loop is not a proper hairpin sequence.
- * The loop sequence might be hairpin derived, or it might be derived from
- * the original molecule.
+ * The loop sequence might be hairpin derived (star==0),
+ * or it might be derived from the original molecule (star==1).
  */
 char *
-sim_bs_pal_mol(opt_t *opt, char *seq, size_t mol_len, size_t *full_len)
+sim_bs_pal_mol(opt_t *opt, char *seq, size_t mol_len, size_t *full_len, int star)
 {
 	int rev;
-	int star;
 	char *fullseq;
 	char *loopseq;
 	size_t pal_len;
@@ -202,7 +205,6 @@ sim_bs_pal_mol(opt_t *opt, char *seq, size_t mol_len, size_t *full_len)
 		return sim_bs_mol(opt, seq, mol_len);
 	}
 
-	star = 0; //randbit(opt);
 	if (star) {
 		/* Take loop from the originating molecule.
 		 * I.e. make palindrome look like Star et al. 2014
@@ -257,7 +259,7 @@ sim_bs_pal_mol(opt_t *opt, char *seq, size_t mol_len, size_t *full_len)
 		goto err0;
 	}
 
-	rev = 0; //randbit(opt);
+	rev = randbit(opt);
 	bs_copy(opt, fullseq, seq, pal_len, rev, 0);
 	if (star) {
 		// loop comes from original molecule, which will be BS-treated
@@ -372,13 +374,25 @@ simhbs(opt_t *opt)
 			mol_len = round(rlognorm(opt->state, opt->mu, opt->sigma));
 		} while (mol_len == 0 || pos < 1 || pos+mol_len >= opt->reflen);
 
-		if (opt->hp) {
-			s = sim_hp_bs_mol(opt, opt->refseq+pos, mol_len, &len);
-		} else if (opt->pal) {
-			s = sim_bs_pal_mol(opt, opt->refseq+pos, mol_len, &len);
-		} else {
-			s = sim_bs_mol(opt, opt->refseq+pos, mol_len);
-			len = mol_len;
+		switch (opt->mol_type) {
+			default:
+			case MOL_BSSEQ:
+				s = sim_bs_mol(opt, opt->refseq+pos,
+						mol_len);
+				len = mol_len;
+				break;
+			case MOL_HAIRPIN:
+				s = sim_hp_bs_mol(opt, opt->refseq+pos,
+						mol_len, &len);
+				break;
+			case MOL_PAL_STAR:
+				s = sim_bs_pal_mol(opt, opt->refseq+pos,
+						mol_len, &len, 1);
+				break;
+			case MOL_PAL_MODHP:
+				s = sim_bs_pal_mol(opt, opt->refseq+pos,
+						mol_len, &len, 0);
+				break;
 		}
 
 		if (s == NULL) {
@@ -500,8 +514,12 @@ usage(char *argv0, opt_t *opt)
 	fprintf(stderr, "usage: %s [...] ref.fa\n", argv0);
 	fprintf(stderr, " -b FLOAT       Bisulfite conversion rate [%.3f]\n", opt->bs_rate);
 	fprintf(stderr, " -e FLOAT       Sequencing error rate [%.3f]\n", opt->err_rate);
-	fprintf(stderr, " -h             Simulate hairpin data [%s]\n", ((char *[]){"no", "yes"})[opt->hp]);
-	fprintf(stderr, " -p             Simulate palindromes [%s]\n", ((char *[]){"no", "yes"})[opt->pal]);
+	fprintf(stderr, " -h             Simulate hairpin data [%s]\n",
+					((char *[]){"no", "yes"})[opt->mol_type==MOL_HAIRPIN]);
+	fprintf(stderr, " -p             Simulate palindromes (as in Star et al. 2014) [%s]\n",
+					((char *[]){"no", "yes"})[opt->mol_type==MOL_PAL_STAR]);
+	fprintf(stderr, " -P             Simulate palindromes (modified hairpin) [%s]\n",
+					((char *[]){"no", "yes"})[opt->mol_type==MOL_PAL_MODHP]);
 	fprintf(stderr, " -n INT         Number of sequences to simulate [%zd]\n", opt->n_seqs);
 	fprintf(stderr, " -o STR         Output prefix for fastq files [%s]\n", opt->oprefix);
 	fprintf(stderr, " -r INT         Read length [%zd]\n", opt->readlen);
@@ -524,6 +542,7 @@ main(int argc, char **argv)
 	opt.n_seqs = 100;
 	opt.readlen = 150;
 	opt.phred_scale_out = 33;
+	opt.mol_type = MOL_BSSEQ;
 
 	opt.hairpin = "ACGCCGGCGGCAAGTGAAGCCGCCGGCGT";
 	opt.a1 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCACNNNNNNATCTCGTATGCCGTCTTCTGCTTG";
@@ -539,7 +558,7 @@ main(int argc, char **argv)
 	// seed the random state
 	opt.state = kr_srand(time(NULL));
 
-	while ((c = getopt(argc, argv, "b:e:hpn:o:u:s:")) != -1) {
+	while ((c = getopt(argc, argv, "b:e:hpPn:o:u:s:")) != -1) {
 		switch (c) {
 			case 'b':
 				opt.bs_rate = atof(optarg);
@@ -558,10 +577,28 @@ main(int argc, char **argv)
 				}
 				break;
 			case 'h':
-				opt.hp = 1;
+				if (opt.mol_type != MOL_BSSEQ) {
+					fprintf(stderr, "-h, -p, and -P are mutually exclusive\n");
+					ret = -2;
+					goto err0;
+				}
+				opt.mol_type = MOL_HAIRPIN;
 				break;
 			case 'p':
-				opt.pal = 1;
+				if (opt.mol_type != MOL_BSSEQ) {
+					fprintf(stderr, "-h, -p, and -P are mutually exclusive\n");
+					ret = -2;
+					goto err0;
+				}
+				opt.mol_type = MOL_PAL_STAR;
+				break;
+			case 'P':
+				if (opt.mol_type != MOL_BSSEQ) {
+					fprintf(stderr, "-h, -p, and -P are mutually exclusive\n");
+					ret = -2;
+					goto err0;
+				}
+				opt.mol_type = MOL_PAL_MODHP;
 				break;
 			case 'n':
 				opt.n_seqs = strtoul(optarg, NULL, 0);
@@ -602,11 +639,6 @@ main(int argc, char **argv)
 				usage(argv[0], &opt);
 				break;
 		}
-	}
-
-	if (opt.hp && opt.pal) {
-		fprintf(stderr, "Error: -h and -p flags are mutually exclusive\n");
-		usage(argv[0], &opt);
 	}
 
 	if (argc-optind != 1) {
