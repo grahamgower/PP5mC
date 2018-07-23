@@ -24,10 +24,9 @@ def comment2ssqq(label):
 
 def parse_fq(filename):
     """
-    fastq parser
+    Fastq parser. Doesn't do fasta.
     """
 
-    state = 0
     label = None
     comment = None
     qual = None
@@ -44,31 +43,27 @@ def parse_fq(filename):
             if len(line) == 0:
                 continue
 
-            # fastq
-            if lineno%4 == 0 and line[0] == "@":
+            state = lineno%4
+
+            if state == 0:
+                assert line[0] == "@", "invalid fastq file"
+
                 if label is not None:
-                    yield label, comment, "".join(seq), "".join(qual)
-                state = 1
+                    yield label, comment, seq, qual
                 lfields = line.split(None, 1)
                 label = lfields[0]
                 if len(lfields) > 1:
                     comment = lfields[1]
                 else:
                     comment = None
-                seq = []
-                qual = []
-                continue
-            elif line[0] == "+":
-                state = 2
-                continue
 
-            if state == 1:
-                seq.append(line)
-            elif state == 2:
-                qual.append(line)
+            elif state == 1:
+                seq = line
+            elif state == 3:
+                qual = line
 
     if label is not None:
-        yield label, comment, "".join(seq), "".join(qual)
+        yield label, comment, seq, qual
 
 # Inverse poisson CDF, stolen from bwa: bwtaln.c
 def bwa_cal_maxdiff(l, err=0.02, thres=0.01, maxlen=1000):
@@ -109,12 +104,13 @@ def revcomp(seq):
 def parse_args():
     import argparse
     parser = argparse.ArgumentParser(description="HTMLify fastq files to troubleshoot hairpin-ligated bisulfite-treated files")
+    parser.add_argument("-u", "--unmethylated-hairpin", default=False, action="store_true", help="hairpin is BS-converted prior to sequencing [%(default)s]")
     parser.add_argument("-n", "--nseqs", type=int, default=1000, help="only output this many sequences [(%default)s]")
     parser.add_argument("-p", "--hairpin", action="append", help="hairpin sequence(s)")
     parser.add_argument("--latex", action="store_true", default=False, help="LaTeX output [%(default)s]")
     parser.add_argument("-i", "--interleaved", action="store_true", default=False, help="R1/R2 are interleaved in one fastq")
-    parser.add_argument("-m", "--adapter-matchlen", type=int, default=9, help="min number of bases to match hairpin/adapter at end of read")
-    parser.add_argument("fq1", metavar="f1.fq", help="fastq r1 or folded")
+    parser.add_argument("-m", "--adapter-matchlen", type=int, default=11, help="min number of bases to match hairpin/adapter at end of read")
+    parser.add_argument("fq1", metavar="f1.fq", help="fastq r1 (or folded.fq if no r2.fq and no --interleaved)")
     parser.add_argument("fq2", metavar="f2.fq", help="fastq r2", nargs='?', default=None)
     args = parser.parse_args()
 
@@ -123,6 +119,9 @@ def parse_args():
                         "ACGCCGGCGGCAAGTAAGCCGCCGGCGT",
                         "ACGCCGGCGGCAAGTAGCCGCCGGCGT"]
 
+    if args.unmethylated_hairpin:
+        args.hairpin = [h.replace("C", "T") for h in args.hairpin]
+
     args.rhairpin = [revcomp(h) for h in args.hairpin]
 
     return args
@@ -130,8 +129,10 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
-    p5 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTA" #[:args.adapter_matchlen]
-    p7 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC" #[:args.adapter_matchlen]
+    p5 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTA"
+    p7 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC"
+
+    #print("using hairpins:", args.hairpin, args.rhairpin, sep="\n", file=sys.stderr)
 
     yy_maxdiff = bwa_cal_maxdiff(len(p5))
     hp_maxdiff = [bwa_cal_maxdiff(len(s)) for s in args.hairpin]
@@ -315,16 +316,14 @@ if __name__ == "__main__":
             s2_list.append((s2, s2_cls))
 
         if args.latex:
-            print(label, "\\\\")
+            print("\\verb!", label, "!", "\\\\", sep="")
             print("R1", g(s1_list), "\\\\")
             if ss is None:
                 print("R2", g(s2_list))
             else:
                 print("R2", g(s2_list), "\\\\")
                 print("FS ", ss, "\\\\")
-                qq = qq.replace("&", "\\&")
-                qq = qq.replace("$", "\\$")
-                print("FQ ", qq)
+                print("FQ \\verb|", qq, "|", sep="")
             print("}\\vskip\\baselineskip \\end{samepage}\n")
         else:
             print(label, "</br>")
