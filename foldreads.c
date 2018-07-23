@@ -498,10 +498,16 @@ adapter_free(struct adapter *a)
 }
 
 int
-hairpin_init(struct hairpin *h, const char *s)
+hairpin_init(struct hairpin *h, char *s, int c2t)
 {
 	char *s_rev;
 	int ret;
+
+	if (c2t) {
+		char *c;
+		for (c=s; *c!='\0'; (*c)++)
+			if (*c == 'C') *c = 'T';
+	}
 
 	h->fwd = adapter_init(s);
 	if (h->fwd == NULL) {
@@ -544,6 +550,7 @@ usage(char *argv0)
 	fprintf(stderr, " -m FILE           Metrics output file [stderr]\n");
 	fprintf(stderr, " -u PREFIX         Filename prefix for unfolded reads []\n");
 	fprintf(stderr, " -p SEQ            The hairpin SEQuence [ACGCCGGCGGCAAGTGAAGCCGCCGGCGT]\n");
+	fprintf(stderr, " -P SEQ            The hairpin SEQ (unmethylated and will be C->T converted)\n");
 	fprintf(stderr, " -1 IN1.FQ[.GZ]    R1 fastq input file\n");
 	fprintf(stderr, " -2 IN2.FQ[.GZ]    R2 fastq input file\n");
 	fprintf(stderr, " -T SEQ            Adapter SEQuence trailing R1 (p7) []\n");
@@ -576,7 +583,7 @@ main(int argc, char **argv)
 	opt.phred_scale_out = 33;
 	opt.adapter_matchlen = 9;
 
-	while ((c = getopt(argc, argv, "o:m:p:u:1:2:T:B:")) != -1) {
+	while ((c = getopt(argc, argv, "o:m:p:P:u:1:2:T:B:")) != -1) {
 		switch (c) {
 			case 'o':
 				fos_fn = optarg;
@@ -585,6 +592,7 @@ main(int argc, char **argv)
 				opt.metrics_fn = optarg;
 				break;
 			case 'p':
+			case 'P':
 				if (strlen(optarg) < opt.adapter_matchlen) {
 					fprintf(stderr, "Hairpin sequence `%s' too short for reliable identification\n", optarg);
 					exit(1);
@@ -597,7 +605,7 @@ main(int argc, char **argv)
 					exit(1);
 				}
 				h = htmp;
-				if (hairpin_init(h + (opt.n_hairpins-1), optarg) < 0)
+				if (hairpin_init(h + (opt.n_hairpins-1), optarg, c=='P') < 0)
 					exit(1);
 				break;
 			case 'u':
@@ -634,15 +642,15 @@ main(int argc, char **argv)
 		}
 
 		// default hairpin sequence, central T is biotinylated
-		if (hairpin_init(h, "ACGCCGGCGGCAAGTGAAGCCGCCGGCGT") < 0)
+		if (hairpin_init(h, "ACGCCGGCGGCAAGTGAAGCCGCCGGCGT", 0) < 0)
 			exit(1);
 
 		// polymerase skipped a base after biotin
-		if (hairpin_init(h+1, "ACGCCGGCGGCAAGTAAGCCGCCGGCGT") < 0)
+		if (hairpin_init(h+1, "ACGCCGGCGGCAAGTAAGCCGCCGGCGT", 0) < 0)
 			exit(1);
 
 		// polymerase skipped two bases after biotin
-		if (hairpin_init(h+2, "ACGCCGGCGGCAAGTAGCCGCCGGCGT") < 0)
+		if (hairpin_init(h+2, "ACGCCGGCGGCAAGTAGCCGCCGGCGT", 0) < 0)
 			exit(1);
 	}
 
