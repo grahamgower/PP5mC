@@ -96,18 +96,6 @@ randnt(opt_t *opt)
 }
 
 
-// add sequencing errors
-void
-overlay_err(opt_t *opt, char *seq, size_t n)
-{
-	int i;
-	for (i=0; i<n; i++) {
-		double e = kr_drand(opt->state);
-		if (e < opt->err_rate)
-			seq[i] = randnt(opt);
-	}
-}
-
 // copy, with bisulfite conversion outside CpG context
 void
 bs_copy(opt_t *opt, char *dst, char *src, size_t n, int rev, int noctx)
@@ -281,17 +269,44 @@ err0:
 	return fullseq;
 }
 
+// add sequencing errors
 void
-sim_quals(opt_t *opt, char *q, size_t len)
+overlay_err(opt_t *opt, double *err, char *seq, size_t n)
 {
 	int i;
-	int e = opt->err_rate==0 ? 40 : -10 * log10(opt->err_rate);
+	for (i=0; i<n; i++) {
+		double e = kr_drand(opt->state);
+		if (e < err[i])
+			seq[i] = randnt(opt);
+	}
+}
 
-	if (e > 40)
-		e = 40;
+void
+sim_quals(opt_t *opt, double *err, char *q, size_t len)
+{
+	int i;
+	int e;
 
-	for (i=0; i<len; i++)
+	for (i=0; i<len; i++) {
+		if (opt->err_rate == 0) {
+			err[i] = 0;
+			q[i] = 40;
+		} else {
+			double x = kr_normal(opt->state);
+			err[i] = fabs(opt->err_rate*(1+10*x));
+			if (err[i] > 0.75)
+				err[i] = 0.75;
+		}
+
+		if (err[i] == 0) {
+			e = 40;
+		} else {
+			e = 1 + (int) -10*log10(err[i]);
+			if (e > 40)
+				e = 40;
+		}
 		q[i] = e + opt->phred_scale_out;
+	}
 }
 
 
@@ -305,6 +320,7 @@ simhbs(opt_t *opt)
 	size_t mol_len;
 
 	char *s1, *s2, *q1, *q2;
+	double *e1, *e2; // error profiles
 
 	char *tmpfn;
 	FILE *ofp1, *ofp2;
@@ -337,6 +353,20 @@ simhbs(opt_t *opt)
 		goto err3;
 	}
 
+	e1 = malloc(sizeof(double)*opt->readlen);
+	if (e1 == NULL) {
+		perror("malloc");
+		ret = -5;
+		goto err4;
+	}
+
+	e2 = malloc(sizeof(double)*opt->readlen);
+	if (e2 == NULL) {
+		perror("malloc");
+		ret = -6;
+		goto err5;
+	}
+
 	s1[opt->readlen] = '\0';
 	s2[opt->readlen] = '\0';
 	q1[opt->readlen] = '\0';
@@ -345,23 +375,23 @@ simhbs(opt_t *opt)
 	tmpfn = malloc(strlen(opt->oprefix)+64);
 	if (tmpfn == NULL) {
 		perror("malloc");
-		ret = -5;
-		goto err4;
+		ret = -7;
+		goto err6;
 	}
 	sprintf(tmpfn, "%s.r1.fq", opt->oprefix);
 	ofp1 = fopen(tmpfn, "w");
 	if (ofp1 == NULL) {
 		free(tmpfn);
-		ret = -6;
-		goto err4;
+		ret = -8;
+		goto err6;
 	}
 	sprintf(tmpfn, "%s.r2.fq", opt->oprefix);
 	ofp2 = fopen(tmpfn, "w");
 	if (ofp2 == NULL) {
 		fclose(ofp1);
 		free(tmpfn);
-		ret = -7;
-		goto err4;
+		ret = -9;
+		goto err6;
 	}
 	free(tmpfn);
 
@@ -396,8 +426,8 @@ simhbs(opt_t *opt)
 		}
 
 		if (s == NULL) {
-			ret = -8;
-			goto err5;
+			ret = -10;
+			goto err7;
 		}
 
 		memcpy(s1, s, min(opt->readlen, len));
@@ -417,20 +447,34 @@ simhbs(opt_t *opt)
 			}
 		}
 
-		overlay_err(opt, s1, opt->readlen);
-		overlay_err(opt, s2, opt->readlen);
+		sim_quals(opt, e1, q1, opt->readlen);
+		sim_quals(opt, e2, q2, opt->readlen);
 
-		sim_quals(opt, q1, opt->readlen);
-		sim_quals(opt, q2, opt->readlen);
+		overlay_err(opt, e1, s1, opt->readlen);
+		overlay_err(opt, e2, s2, opt->readlen);
 
-		fprintf(ofp1, "@simhbs:%d LEN=%zd\n%s\n+\n%s\n", n, mol_len, s1, q1);
-		fprintf(ofp2, "@simhbs:%d LEN=%zd\n%s\n+\n%s\n", n, mol_len, s2, q2);
+		{
+			int i;
+			char *s = opt->refseq+pos;
+
+			fprintf(ofp1, "@simhbs:%d ", n);
+			for (i=0; i<mol_len; i++)
+				fputc(s[i], ofp1);
+			fprintf(ofp1, "\n%s\n+\n%s\n", s1, q1);
+
+			fprintf(ofp2, "@simhbs:%d\n%s\n+\n%s\n",
+					n, s2, q2);
+		}
 	}
 
 	ret = 0;
-err5:
+err7:
 	fclose(ofp2);
 	fclose(ofp1);
+err6:
+	free(e2);
+err5:
+	free(e1);
 err4:
 	free(q2);
 err3:
@@ -482,8 +526,12 @@ load_ref(opt_t *opt, char *fn)
 		refseq = tmp;
 
 		//memcpy(refseq+reflen, ks->seq.s, len);
-		for (i=0; i<len; i++)
-			refseq[reflen+i] = toupper(ks->seq.s[i]);
+		for (i=0; i<len; i++) {
+			char nt = toupper(ks->seq.s[i]);
+			if (nt == 'N')
+				nt = randnt(opt);
+			refseq[reflen+i] = nt;
+		}
 
 		reflen += len;
 	}
