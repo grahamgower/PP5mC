@@ -618,9 +618,9 @@ clean_quals(const char *s, char *q, size_t len, int phred_scale_in)
 		}*/
 
 		*qi -= phred_scale_in;
-		if (*q < 2)
-			*q = 2;
-		if (*q >= PHRED_MAX)
-			*q = PHRED_MAX-1;
+		if (*qi < 2)
+			*qi = 2;
+		if (*qi >= PHRED_MAX)
+			*qi = PHRED_MAX-1;
 	}
 }
