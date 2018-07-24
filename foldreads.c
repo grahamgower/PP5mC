@@ -117,19 +117,19 @@ fold(const opt_t *opt, metrics_t *metrics,
 				h->rev->pv, h->rev->l, &h1, &h2);
 
 		if (h1 != h2) {
-			// these reads are untrustworthy
 			if (h1+opt->adapter_matchlen < len1 && h2+opt->adapter_matchlen < len2) {
 				// polymerase slippage? chimera?
 				metrics->hairpin_dislocated++;
+				goto discard_reads;
 			}
-			goto discard_reads;
 		}
 
-		if (h1+opt->adapter_matchlen < len1) {
+		if (h1+opt->adapter_matchlen < len1 || h2+opt->adapter_matchlen < len2) {
 			// found the hairpin
 			*hindex = i;
-			if (h1+h->fwd->l <= len1) // && h2+h->rev->l <= len2)
+			if (h1+h->fwd->l <= len1 || h2+h->rev->l <= len2)
 				metrics->hairpin_complete++;
+			h1 = h2 = min(h1, h2);
 			break;
 		}
 	}
@@ -166,7 +166,7 @@ fold(const opt_t *opt, metrics_t *metrics,
 				s_out, q_out);
 	} else {
 		// long molecule, just match up to the hairpin
-		if (*hindex != -1) {
+		if (*hindex != -1 || h1 == h2) {
 			len1 = h1;
 			len2 = h2;
 		}
@@ -505,7 +505,7 @@ hairpin_init(struct hairpin *h, char *s, int c2t)
 
 	if (c2t) {
 		char *c;
-		for (c=s; *c!='\0'; (*c)++)
+		for (c=s; *c!='\0'; c++)
 			if (*c == 'C') *c = 'T';
 	}
 
