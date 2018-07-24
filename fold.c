@@ -370,11 +370,12 @@ init_match1bp_cache()
  * Match a single base pair.
  */
 static void
-match1bp(char c1, char c2, char q1, char q2,
+match1bp(char _c1, char _c2, char q1, char q2,
 		char *c_out, char *q_out,
 		int allow_bs)
 {
 	int x;
+	char c1, c2;
 	static int cached_inited = 0;
 
 	if (!cached_inited) {
@@ -382,8 +383,8 @@ match1bp(char c1, char c2, char q1, char q2,
 		cached_inited = 1;
 	}
 
-	c1 = toupper(c1);
-	c2 = toupper(c2);
+	c1 = toupper(_c1);
+	c2 = toupper(_c2);
 
 	if (c1 == 'N' || c2 == 'N') {
 		if (allow_bs) {
@@ -403,21 +404,25 @@ match1bp(char c1, char c2, char q1, char q2,
 					break;
 				case 'G':
 					// might have C or 5mC on other strand
-					*c_out = 'N';
+					*c_out = _c1;
+					*q_out = q1;
 					break;
 				case 'T':
 					// might have a T or C
-					*c_out = 'N';
+					*c_out = _c1;
+					*q_out = q1;
 					break;
 			}
 			switch (c2) {
 				case 'A':
 					// might be an A or a G
-					*c_out = 'N';
+					*c_out = _c2;
+					*q_out = q2;
 					break;
 				case 'C':
 					// might be C or 5mC
-					*c_out = 'N';
+					*c_out = _c2;
+					*q_out = q2;
 					break;
 				case 'G':
 					// must have 5mC on other strand
