@@ -109,6 +109,7 @@ def parse_args():
     parser.add_argument("-p", "--hairpin", action="append", help="hairpin sequence(s)")
     parser.add_argument("--latex", action="store_true", default=False, help="LaTeX output [%(default)s]")
     parser.add_argument("-i", "--interleaved", action="store_true", default=False, help="R1/R2 are interleaved in one fastq")
+    parser.add_argument("-o", "--ori", help="HBS-tools *.ori fastq")
     parser.add_argument("-m", "--adapter-matchlen", type=int, default=11, help="min number of bases to match hairpin/adapter at end of read")
     parser.add_argument("fq1", metavar="f1.fq", help="fastq r1 (or folded.fq if no r2.fq and no --interleaved)")
     parser.add_argument("fq2", metavar="f2.fq", help="fastq r2", nargs='?', default=None)
@@ -207,6 +208,15 @@ if __name__ == "__main__":
     elif args.fq2:
         fq2 = parse_fq(args.fq2)
 
+    labelori = ssori = qqori = None
+    fqori = None
+    if args.ori:
+        fqori = parse_fq(args.ori)
+        try:
+            labelori, _, ssori, qqori = next(fqori)
+        except StopIteration:
+            labelori = ssori = qqori = None
+
     seqno = 0
 
     while True:
@@ -266,6 +276,15 @@ if __name__ == "__main__":
             else:
                 p5i = mmfind(p5, ss2, yy_maxdiff, min_matches=args.adapter_matchlen)
 
+        if fqori:
+            ss = qq = None
+            if labelori==label:
+                ss = ssori
+                qq = qqori
+                try:
+                    labelori, _, ssori, qqori = next(fqori)
+                except StopIteration:
+                    labelori = ssori = qqori = None
 
         if seqno > args.nseqs:
             break
