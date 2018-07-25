@@ -59,6 +59,11 @@ typedef struct {
 	double err_rate; // sequencing error rate
 	double bs_rate; // bisulfite conversion rate
 
+	struct {
+		double *mu1, *mu2, // MVN means for read1, read2
+		       *L1, *L2; // Cholesky decompositions to generate MVN
+	} err_profile; // empirical error profile
+
 	// random state
 	krand_t *state;
 } opt_t;
@@ -93,6 +98,24 @@ char
 randnt(opt_t *opt)
 {
 	return "ACGT"[(randbit(opt)<<1) + randbit(opt)];
+}
+
+char
+randsubst(opt_t *opt, char c)
+{
+	switch (c) {
+		case 'A':
+			return "CGT"[(int)kr_drand(opt->state)*3];
+		case 'C':
+			return "AGT"[(int)kr_drand(opt->state)*3];
+		case 'G':
+			return "ACT"[(int)kr_drand(opt->state)*3];
+		case 'T':
+			return "ACG"[(int)kr_drand(opt->state)*3];
+		default:
+		case 'N':
+			return randnt(opt);
+	}
 }
 
 
@@ -277,38 +300,49 @@ overlay_err(opt_t *opt, double *err, char *seq, size_t n)
 	for (i=0; i<n; i++) {
 		double e = kr_drand(opt->state);
 		if (e < err[i])
-			seq[i] = randnt(opt);
+			seq[i] = randsubst(opt, seq[i]);
 	}
 }
 
+// generate error probabilities and qual scores
 void
-sim_quals(opt_t *opt, double *err, char *q, size_t len)
+sim_quals(opt_t *opt, double *err, char *q, size_t len, double *mu, double *L)
 {
-	int i;
+	double z[len];
+	double x;
+	int i, j;
 	int e;
 
+	for (i=0; i<len; i++)
+		z[i] = kr_normal(opt->state);
+
 	for (i=0; i<len; i++) {
-		if (opt->err_rate == 0) {
-			err[i] = 0;
-			q[i] = 40;
+		if (mu) {
+			// multivariate normal, from empirical profile
+			// https://en.wikipedia.org/wiki/Multivariate_normal_distribution#Drawing_values_from_the_distribution
+			x = mu[i];
+			for (j=0; j<=i; j++)
+				x += L[i*len+j] * z[j];
+			err[i] = pow(10, -x/10.0);
 		} else {
-			double x = kr_normal(opt->state);
-			err[i] = fabs(opt->err_rate*(1+10*x));
-			if (err[i] > 0.75)
-				err[i] = 0.75;
+			// univariate normal, with flat error rate
+			err[i] = opt->err_rate * (1 + 10*z[i]);
 		}
 
-		if (err[i] == 0) {
+		if (err[i] <= 0) {
+			err[i] = 0;
 			e = 40;
+		} else if (err[i] >= 0.75) {
+			err[i] = 0.75;
+			e = 2;
 		} else {
-			e = 1 + (int) -10*log10(err[i]);
+			e = 0.5 -10*log10(err[i]);
 			if (e > 40)
 				e = 40;
 		}
 		q[i] = e + opt->phred_scale_out;
 	}
 }
-
 
 int
 simhbs(opt_t *opt)
@@ -437,6 +471,7 @@ simhbs(opt_t *opt)
 		free(s);
 
 		if (opt->readlen > len) {
+			// read into the adapters
 			memcpy(s1+len, opt->a1, min(opt->readlen-len,opt->alen));
 			memcpy(s2+len, opt->a2, min(opt->readlen-len,opt->alen));
 			if (opt->readlen > len+opt->alen) {
@@ -447,9 +482,11 @@ simhbs(opt_t *opt)
 			}
 		}
 
-		sim_quals(opt, e1, q1, opt->readlen);
-		sim_quals(opt, e2, q2, opt->readlen);
+		// generate error probabilities for each position
+		sim_quals(opt, e1, q1, opt->readlen, opt->err_profile.mu1, opt->err_profile.L1);
+		sim_quals(opt, e2, q2, opt->readlen, opt->err_profile.mu2, opt->err_profile.L2);
 
+		// apply error, with probabilities generated above
 		overlay_err(opt, e1, s1, opt->readlen);
 		overlay_err(opt, e2, s2, opt->readlen);
 
@@ -487,6 +524,11 @@ err0:
 	return ret;
 }
 
+/*
+ * Copy ref sequence into a linear chunk of memory.
+ * Simulated reads might cross the boundary between one contig/chromosome
+ * and another. Meh.
+ */
 int
 load_ref(opt_t *opt, char *fn)
 {
@@ -555,6 +597,158 @@ err0:
 	return ret;
 }
 
+/*
+ * Cholesky decomposition of positive definite matrix S = L * L^T,
+ * where L is the lower Cholesky factor, and L^T is the transpose of L.
+ */
+void
+cholesky(double *S, double *L, int n)
+{
+	int i, j, k;
+	double x;
+	for (i=0; i<n; i++) {
+		for (k=0; k<=i; k++) {
+			x = 0;
+			for (j=0; j<k; j++)
+				x += L[i*n+j] * L[k*n+j];
+			if (i==k) {
+				L[k*n+k] = sqrt(S[k*n+k] - x);
+			} else {
+				L[i*n+k] = (S[i*n+k] - x) / L[k*n+k];
+			}
+		}
+	}
+}
+
+/*
+ * Parse empirical profile, as output by `qualprofile'.
+ */
+int
+parse_error_profile(char *fn, double **_mu, double **_L, int len)
+{
+	int i = 0, j;
+	int ret;
+	int lineno;
+	FILE *fp;
+	char *buf = NULL;
+	size_t buflen = 0;
+	ssize_t nbytes;
+
+	double *mu; // MVN means
+	double *Sigma; // MVN covariance matrix
+	double *L; // Cholesky decomposition of Sigma
+
+	fp = fopen(fn, "r");
+	if (fp == NULL) {
+		fprintf(stderr, "%s: %s\n", fn, strerror(errno));
+		ret = -1;
+		goto err0;
+	}
+
+	mu = calloc(len, sizeof(double));
+	if (mu == NULL) {
+		perror("calloc");
+		ret = -2;
+		goto err1;
+	}
+
+	Sigma = calloc(len*len, sizeof(double));
+	if (Sigma == NULL) {
+		perror("calloc");
+		ret = -3;
+		goto err2;
+	}
+
+	L = calloc(len*len, sizeof(double));
+	if (L == NULL) {
+		perror("calloc");
+		ret = -4;
+		goto err3;
+	}
+
+	for (lineno=1; ; lineno++) {
+		if ((nbytes = getline(&buf, &buflen, fp)) == -1) {
+			if (errno) {
+				fprintf(stderr, "getline: %s: %s\n",
+						fn, strerror(errno));
+				ret = -5;
+				goto err4;
+			}
+			break;
+		}
+
+		char *c;
+		double x;
+
+		c = strtok(buf, "\t \n");
+		if (c == NULL)
+			continue;
+
+		if (!strcmp(c, "MEAN")) {
+			for (j=0; j<len; j++) {
+				c = strtok(NULL, "\t \n");
+				if (c == NULL) {
+					fprintf(stderr, "%s:%d: desired read length is %d, but only found %d values in profile.\n", fn, lineno, len, j+1);
+					ret = -6;
+					goto err4;
+				}
+				x = strtod(c, NULL);
+				if (x <= 0 || x >= 64) {
+					fprintf(stderr, "%s:%d: mean=`%s` is invalid.\n", fn, lineno, c);
+					ret = -7;
+					goto err4;
+				}
+				mu[j] = x;
+			}
+		} else if (!strcmp(c, "COV")) {
+			for (j=0; j<=i; j++) {
+				c = strtok(NULL, "\t \n");
+				if (c == NULL) {
+					fprintf(stderr, "%s:%d: desired read length is %d, but only found %d values in profile.\n", fn, lineno, len, j+1);
+					ret = -8;
+					goto err4;
+				}
+				x = strtod(c, NULL);
+				if (x <= 0 || x >= 64*64) {
+					fprintf(stderr, "%s:%d: cov[%d,%d]=`%s` is invalid.\n", fn, lineno, j+1,i+1, c);
+					ret = -9;
+					goto err4;
+				}
+				Sigma[i*len+j] = x;
+			}
+
+			if (++i == len)
+				break;
+		}
+	}
+
+	if (i != len) {
+		fprintf(stderr, "%s: desired read length is %d, but only found %d COV lines in profile.\n", fn, len, i+1);
+		ret = -10;
+		goto err4;
+	}
+
+	cholesky(Sigma, L, len);
+
+	*_L = L;
+	*_mu = mu;
+	ret = 0;
+err4:
+	if (buf)
+		free(buf);
+	if (ret == -1)
+		free(L);
+err3:
+	free(Sigma);
+err2:
+	if (ret == -1)
+		free(mu);
+err1:
+	fclose(fp);
+err0:
+	return ret;
+}
+
 void
 usage(char *argv0, opt_t *opt)
 {
@@ -562,6 +756,7 @@ usage(char *argv0, opt_t *opt)
 	fprintf(stderr, "usage: %s [...] ref.fa\n", argv0);
 	fprintf(stderr, " -b FLOAT       Bisulfite conversion rate [%.3f]\n", opt->bs_rate);
 	fprintf(stderr, " -e FLOAT       Sequencing error rate [%.3f]\n", opt->err_rate);
+	fprintf(stderr, " -E FILE1,FILE2 Empirical error profiles, from `qualprofile'\n");
 	fprintf(stderr, " -h             Simulate hairpin data [%s]\n",
 					((char *[]){"no", "yes"})[opt->mol_type==MOL_HAIRPIN]);
 	fprintf(stderr, " -p             Simulate palindromes (as in Star et al. 2014) [%s]\n",
@@ -583,6 +778,7 @@ main(int argc, char **argv)
 	int c;
 	int ret;
 	char *ref_fn;
+	char *profile_fn = NULL;
 	int a1len, a2len;
 
 	memset(&opt, '\0', sizeof(opt_t));
@@ -606,7 +802,7 @@ main(int argc, char **argv)
 	// seed the random state
 	opt.state = kr_srand(time(NULL));
 
-	while ((c = getopt(argc, argv, "b:e:hpPn:o:u:s:")) != -1) {
+	while ((c = getopt(argc, argv, "b:e:E:hpPn:o:u:s:")) != -1) {
 		switch (c) {
 			case 'b':
 				opt.bs_rate = atof(optarg);
@@ -623,6 +819,9 @@ main(int argc, char **argv)
 					ret = -1;
 					goto err0;
 				}
+				break;
+			case 'E':
+				profile_fn = optarg;
 				break;
 			case 'h':
 				if (opt.mol_type != MOL_BSSEQ) {
@@ -721,6 +920,23 @@ main(int argc, char **argv)
 
 	opt.alen = min(a1len, a2len);
 
+	if (profile_fn) {
+		char *fn1 = strtok(profile_fn, ",");
+		char *fn2 = strtok(NULL, ",");
+
+		if (parse_error_profile(fn1,
+				&opt.err_profile.mu1, &opt.err_profile.L1,
+				opt.readlen) < 0) {
+			ret = -1;
+			goto err0;
+		}
+		if (parse_error_profile(fn2,
+				&opt.err_profile.mu2, &opt.err_profile.L2,
+				opt.readlen) < 0) {
+			ret = -1;
+			goto err0;
+		}
+	}
 
 
 	if (load_ref(&opt, ref_fn) < 0) {
@@ -729,9 +945,20 @@ main(int argc, char **argv)
 	}
 
 	ret = simhbs(&opt);
-	free(opt.rhairpin);
-	free(opt.refseq);
-	free(opt.state);
 err0:
+	if (opt.err_profile.mu1)
+		free(opt.err_profile.mu1);
+	if (opt.err_profile.L1)
+		free(opt.err_profile.L1);
+	if (opt.err_profile.mu2)
+		free(opt.err_profile.mu2);
+	if (opt.err_profile.L2)
+		free(opt.err_profile.L2);
+	if (opt.rhairpin)
+		free(opt.rhairpin);
+	if (opt.refseq)
+		free(opt.refseq);
+	if (opt.state)
+		free(opt.state);
 	return ret;
 }

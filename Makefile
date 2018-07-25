@@ -20,5 +20,8 @@ simhbs: simhbs.o fold.o kmath.o
 test_fit: test_fit.o fold.o kmath.o fit_lognorm.o
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS) -lm
 
+qualprofile: qualprofile.o
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS) -lz
+
 clean:
 	rm -f *.o foldreads mark5mC scanbp simhbs test_fit
