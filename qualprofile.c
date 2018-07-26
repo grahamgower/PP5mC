@@ -39,7 +39,7 @@ qualprofile(char *fn)
 	kseq_t *seq;
 
 	double *mu = NULL; // MVN mean
-	double *sigma = NULL; // MVN covariance matrix
+	double *Sigma = NULL; // MVN covariance matrix
 
 	fp = gzopen(fn, "r");
 	if (fp == NULL) {
@@ -67,8 +67,8 @@ qualprofile(char *fn)
 				ret = -3;
 				goto err4;
 			}
-			sigma = calloc(qlen*qlen, sizeof(double));
-			if (sigma == NULL) {
+			Sigma = calloc(qlen*qlen, sizeof(double));
+			if (Sigma == NULL) {
 				perror("calloc");
 				ret = -4;
 				goto err4;
@@ -83,19 +83,25 @@ qualprofile(char *fn)
 
 		/*
 		 * Qual scores ought to be correlated along a sequence,
-		 * so each read should have MVN distributed qual scores.
+		 * so model each read as having MVN distributed qual scores.
+		 *
+		 * NOTE: we really estimate mu and Sigma for a truncated MVN,
+		 * and would like to recover the pre-trucated parameters in
+		 * order that simulations (subsequently truncated also)
+		 * reflect the correct empirical distribution.  The effect
+		 * of not taking this into account is that our parameter
+		 * estimates are biased low.  Possible solutions:
+		 * https://stats.stackexchange.com/questions/58081/pre-truncation-moments-for-truncated-multivariate-normal
+		 *
 		 * Cumulative mean and covariance adapted from
 		 * Knuth TAOCP vol 2, 3rd edition, p 232.
 		 */
 		for (i=0; i<qlen; i++) {
-			double q = seq->qual.s[i];
-			double last_mu = mu[i];
-
-			mu[i] += (q - last_mu) / nseqs;
-
+			double qi = seq->qual.s[i];
+			mu[i] += (qi - mu[i]) / nseqs;
 			for (j=0; j<=i; j++) {
 				double qj = seq->qual.s[j];
-			 	sigma[i*qlen+j] += (qj - mu[j]) * (q - last_mu);
+				Sigma[i*qlen+j] += (qj - mu[j]) * (qi - mu[i]);
 			}
 		}
 	}
@@ -112,22 +118,24 @@ qualprofile(char *fn)
 		goto err4;
 	}
 
+	printf("# Average phred scaled quality score for each position in the reads.\n");
 	printf("MEAN");
 	for (i=0; i<qlen; i++)
-		printf(" %.3lf", mu[i]-PHRED_SCALE);
+		printf(" %f", mu[i]-PHRED_SCALE);
 	printf("\n\n");
 
+	printf("# Covariance matrix (lower triangle) of the quality scores.\n");
 	for (i=0; i<qlen; i++) {
 		printf("COV");
 		for (j=0; j<=i; j++)
-			printf(" %.3lf", sigma[i*qlen+j] / (nseqs-1));
+			printf(" %f", Sigma[i*qlen+j] / (nseqs-1));
 		printf("\n");
 	}
 
 	ret = 0;
 err4:
-	if (sigma)
-		free(sigma);
+	if (Sigma)
+		free(Sigma);
 //err3:
 	if (mu)
 		free(mu);

@@ -304,30 +304,21 @@ overlay_err(opt_t *opt, double *err, char *seq, size_t n)
 	}
 }
 
-// generate error probabilities and qual scores
+/*
+ * Generate error probabilities and qual scores.
+ * Univariate Normal, constant mean error rate.
+ */
 void
-sim_quals(opt_t *opt, double *err, char *q, size_t len, double *mu, double *L)
+sim_quals_norm(opt_t *opt, double *err, char *q, size_t len)
 {
-	double z[len];
-	double x;
-	int i, j;
+	int i;
 	int e;
 
-	for (i=0; i<len; i++)
-		z[i] = kr_normal(opt->state);
+	double mu = opt->err_rate;
+	double std = 10*opt->err_rate;
 
 	for (i=0; i<len; i++) {
-		if (mu) {
-			// multivariate normal, from empirical profile
-			// https://en.wikipedia.org/wiki/Multivariate_normal_distribution#Drawing_values_from_the_distribution
-			x = mu[i];
-			for (j=0; j<=i; j++)
-				x += L[i*len+j] * z[j];
-			err[i] = pow(10, -x/10.0);
-		} else {
-			// univariate normal, with flat error rate
-			err[i] = opt->err_rate * (1 + 10*z[i]);
-		}
+		err[i] = mu + kr_normal(opt->state)*std;
 
 		if (err[i] <= 0) {
 			err[i] = 0;
@@ -341,6 +332,41 @@ sim_quals(opt_t *opt, double *err, char *q, size_t len, double *mu, double *L)
 				e = 40;
 		}
 		q[i] = e + opt->phred_scale_out;
+	}
+}
+
+/*
+ * Generate error probabilities and qual scores.
+ * Multivariate Normal, from empirical profile.
+ * https://en.wikipedia.org/wiki/Multivariate_normal_distribution#Drawing_values_from_the_distribution
+ */
+void
+sim_quals_mvn(opt_t *opt, double *err, char *q, size_t len, const double *mu, const double *L)
+{
+	double z[len];
+	double x;
+	int i, j;
+
+	for (i=0; i<len; i++)
+		z[i] = kr_normal(opt->state);
+
+	for (i=0; i<len; i++) {
+		x = mu[i];
+		for (j=0; j<=i; j++)
+			x += L[i*len+j] * z[j];
+
+		if (x <= 2) {
+			x = 2.0;
+			err[i] = 0.75;
+		} else if (x >= 40) {
+			x = 40.0;
+			err[i] = 0;
+		} else {
+			err[i] = pow(10, -x/10.0);
+			x += 0.5;
+		}
+
+		q[i] = x + opt->phred_scale_out;
 	}
 }
 
@@ -482,9 +508,14 @@ simhbs(opt_t *opt)
 			}
 		}
 
-		// generate error probabilities for each position
-		sim_quals(opt, e1, q1, opt->readlen, opt->err_profile.mu1, opt->err_profile.L1);
-		sim_quals(opt, e2, q2, opt->readlen, opt->err_profile.mu2, opt->err_profile.L2);
+		// generate error probabilities and qual scores for each position
+		if (opt->err_profile.mu1) {
+			sim_quals_mvn(opt, e1, q1, opt->readlen, opt->err_profile.mu1, opt->err_profile.L1);
+			sim_quals_mvn(opt, e2, q2, opt->readlen, opt->err_profile.mu2, opt->err_profile.L2);
+		} else {
+			sim_quals_norm(opt, e1, q1, opt->readlen);
+			sim_quals_norm(opt, e2, q2, opt->readlen);
+		}
 
 		// apply error, with probabilities generated above
 		overlay_err(opt, e1, s1, opt->readlen);
@@ -626,13 +657,12 @@ cholesky(double *S, double *L, int n)
 int
 parse_error_profile(char *fn, double **_mu, double **_L, int len)
 {
-	int i = 0, j;
+	int i, j;
 	int ret;
 	int lineno;
 	FILE *fp;
 	char *buf = NULL;
 	size_t buflen = 0;
-	ssize_t nbytes;
 
 	double *mu; // MVN means
 	double *Sigma; // MVN covariance matrix
@@ -666,7 +696,11 @@ parse_error_profile(char *fn, double **_mu, double **_L, int len)
 		goto err3;
 	}
 
-	for (lineno=1; ; lineno++) {
+	for (i=0, lineno=1; ; lineno++) {
+		char *c;
+		double x;
+		ssize_t nbytes;
+
 		if ((nbytes = getline(&buf, &buflen, fp)) == -1) {
 			if (errno) {
 				fprintf(stderr, "getline: %s: %s\n",
@@ -677,11 +711,8 @@ parse_error_profile(char *fn, double **_mu, double **_L, int len)
 			break;
 		}
 
-		char *c;
-		double x;
-
 		c = strtok(buf, "\t \n");
-		if (c == NULL)
+		if (c == NULL || c[0] == '#')
 			continue;
 
 		if (!strcmp(c, "MEAN")) {
