@@ -193,8 +193,8 @@ if __name__ == "__main__":
         for s, cls in slist:
             if cls != last and len(sl) != 0:
                 out.append(f("".join(sl), last))
-                last = cls
                 sl = []
+            last = cls
             sl.append(s)
         if len(sl) != 0:
             out.append(f("".join(sl), last))
