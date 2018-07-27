@@ -149,9 +149,8 @@ bs_copy(opt_t *opt, char *dst, char *src, size_t n, int rev, int noctx)
 }
 
 char *
-sim_hp_bs_mol(opt_t *opt, char *seq, size_t mol_len, size_t *full_len)
+sim_hp_bs_mol(opt_t *opt, char *seq, size_t mol_len, int rev, size_t *full_len)
 {
-	int rev;
 	char *fullseq;
 
 	*full_len = 2*mol_len + opt->hlen;
@@ -162,7 +161,6 @@ sim_hp_bs_mol(opt_t *opt, char *seq, size_t mol_len, size_t *full_len)
 		goto err0;
 	}
 
-	rev = randbit(opt);
 	bs_copy(opt, fullseq, seq, mol_len, rev, 0);
 	memcpy(fullseq+mol_len, opt->hairpin, opt->hlen);
 	bs_copy(opt, fullseq+mol_len+opt->hlen, seq, mol_len, !rev, 0);
@@ -173,7 +171,7 @@ err0:
 }
 
 char *
-sim_bs_mol(opt_t *opt, char *seq, size_t mol_len)
+sim_bs_mol(opt_t *opt, char *seq, size_t mol_len, int rev)
 {
 	char *fullseq;
 
@@ -184,7 +182,7 @@ sim_bs_mol(opt_t *opt, char *seq, size_t mol_len)
 		goto err0;
 	}
 
-	bs_copy(opt, fullseq, seq, mol_len, randbit(opt), 0);
+	bs_copy(opt, fullseq, seq, mol_len, rev, 0);
 	fullseq[mol_len] = '\0';
 
 err0:
@@ -201,9 +199,8 @@ err0:
  * or it might be derived from the original molecule (star==1).
  */
 char *
-sim_bs_pal_mol(opt_t *opt, char *seq, size_t mol_len, size_t *full_len, int star)
+sim_bs_pal_mol(opt_t *opt, char *seq, size_t mol_len, int rev, size_t *full_len, int star)
 {
-	int rev;
 	char *fullseq;
 	char *loopseq;
 	size_t pal_len;
@@ -213,7 +210,7 @@ sim_bs_pal_mol(opt_t *opt, char *seq, size_t mol_len, size_t *full_len, int star
 #define MIN_LOOP 1
 	if (mol_len < MIN_COMPLEMENT+MIN_LOOP) {
 		*full_len = mol_len;
-		return sim_bs_mol(opt, seq, mol_len);
+		return sim_bs_mol(opt, seq, mol_len, rev);
 	}
 
 	if (star) {
@@ -270,7 +267,6 @@ sim_bs_pal_mol(opt_t *opt, char *seq, size_t mol_len, size_t *full_len, int star
 		goto err0;
 	}
 
-	rev = randbit(opt);
 	bs_copy(opt, fullseq, seq, pal_len, rev, 0);
 	if (star) {
 		// loop comes from original molecule, which will be BS-treated
@@ -458,6 +454,7 @@ simhbs(opt_t *opt)
 	for (n=0; n<opt->n_seqs; n++) {
 		char *s;
 		size_t len;
+		int rev = randbit(opt);;
 
 		do {
 			pos = kr_rand(opt->state) % opt->reflen;
@@ -468,20 +465,20 @@ simhbs(opt_t *opt)
 			default:
 			case MOL_BSSEQ:
 				s = sim_bs_mol(opt, opt->refseq+pos,
-						mol_len);
+						mol_len, rev);
 				len = mol_len;
 				break;
 			case MOL_HAIRPIN:
 				s = sim_hp_bs_mol(opt, opt->refseq+pos,
-						mol_len, &len);
+						mol_len, rev, &len);
 				break;
 			case MOL_PAL_STAR:
 				s = sim_bs_pal_mol(opt, opt->refseq+pos,
-						mol_len, &len, 1);
+						mol_len, rev, &len, 1);
 				break;
 			case MOL_PAL_MODHP:
 				s = sim_bs_pal_mol(opt, opt->refseq+pos,
-						mol_len, &len, 0);
+						mol_len, rev, &len, 0);
 				break;
 		}
 
@@ -523,12 +520,21 @@ simhbs(opt_t *opt)
 
 		{
 			int i;
+			uint64_t mappos;
 			char *s = opt->refseq+pos;
 
-			fprintf(ofp1, "@simhbs:%d ", n);
+			if (rev && mol_len > opt->readlen) {
+				mappos = pos +1 + mol_len - opt->readlen;
+			} else {
+				mappos = pos +1;
+			}
+
+			fprintf(ofp1, "@simhbs:%d om:Z:", n);
+			// original molecule
 			for (i=0; i<mol_len; i++)
 				fputc(s[i], ofp1);
-			fprintf(ofp1, "\n%s\n+\n%s\n", s1, q1);
+			fprintf(ofp1, " ps:i:%zd\n%s\n+\n%s\n",
+					mappos, s1, q1);
 
 			fprintf(ofp2, "@simhbs:%d\n%s\n+\n%s\n",
 					n, s2, q2);
