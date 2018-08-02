@@ -47,7 +47,6 @@ typedef struct {
 #define MOL_BSSEQ	0
 #define MOL_HAIRPIN	1
 #define MOL_PAL_STAR	2
-#define MOL_PAL_MODHP	3
 	int mol_type;
 
 	char *hairpin, *rhairpin; // hairpin and reverse complement
@@ -190,16 +189,15 @@ err0:
 }
 
 /*
- * Simulate interrupted palindromes.
+ * Simulate interrupted palindromes like [1], with bisulfite treatment on top.
+ * [1] Star et al. 2014, doi://10.1371/journal.pone.0089676
  *
  * ====s1====---loop---====s2=====---y-adapter---
  * s1 and s2 are reverse complements, like for proper hairpin molecules,
- * but the loop is not a proper hairpin sequence.
- * The loop sequence might be hairpin derived (star==0),
- * or it might be derived from the original molecule (star==1).
+ * but the loop is not a hairpin sequence.
  */
 char *
-sim_bs_pal_mol(opt_t *opt, char *seq, size_t mol_len, int rev, size_t *full_len, int star)
+sim_bs_pal_mol(opt_t *opt, char *seq, size_t mol_len, int rev, size_t *full_len)
 {
 	char *fullseq;
 	char *loopseq;
@@ -213,51 +211,20 @@ sim_bs_pal_mol(opt_t *opt, char *seq, size_t mol_len, int rev, size_t *full_len,
 		return sim_bs_mol(opt, seq, mol_len, rev);
 	}
 
-	if (star) {
-		/* Take loop from the originating molecule.
-		 * I.e. make palindrome look like Star et al. 2014
-		 * doi://10.1371/journal.pone.0089676
-		 */
-		size_t a, b; // loop start, loop end
-		do {
-			a = kr_rand(opt->state) % (mol_len-2*MIN_COMPLEMENT)
-				+ MIN_COMPLEMENT;
-			b = kr_rand(opt->state) % (mol_len-2*MIN_COMPLEMENT)
-				+ MIN_COMPLEMENT;
-			pal_len = min(a,b);
-			loop_len = max(a,b) - pal_len;
-		} while (loop_len < MIN_LOOP);
-		//fprintf(stderr, "mol_len=%zd, pal_len=%zd, loop_len=%zd\n", mol_len, pal_len, loop_len);
-		loopseq = seq + pal_len;
-	} else {
-		/* Take loop from hairpin sequence.
-		 * I.e. polymerase jumped across the hairpin stem, leaving a
-		 * partial/modified hairpin between the palindromic segments.
-		 *
-		 * Original:        /---hairpin---\
-		 * ====s1====------/               \
-		 * ====s2====----------hairpin-----/
-		 *
-		 * Polymerase jumped, so loop is short:
-		 * ====s1====---------\
-		 * ====s2====---------/
-		 *
-		 * Actually, the empirical cases look a bit weird, and the
-		 * polymerase is probably slipping around making shit up, so
-		 * the loop is often not recognisable as coming from the
-		 * hairpin sequence, other than being GC and methylation rich.
-		 * Here, I simplify the loop sequence, by just taking a random
-		 * subsequence of the hairpin.
-		 */
-		pal_len = mol_len;
-		do {
-			// 10-15 bp
-			//loop_len = round(rlognorm(opt->state, 2.5, 0.1));
-			// 6-20 bp
-			loop_len = round(rlognorm(opt->state, 2.4, 0.25));
-		} while (loop_len < MIN_LOOP || loop_len >= opt->hlen);
-		loopseq = opt->hairpin + kr_rand(opt->state) % (opt->hlen-loop_len);
-	}
+	/* Take loop from the originating molecule.
+	 */
+	size_t a, b; // loop start, loop end
+	do {
+		a = kr_rand(opt->state) % (mol_len-2*MIN_COMPLEMENT)
+			+ MIN_COMPLEMENT;
+		b = kr_rand(opt->state) % (mol_len-2*MIN_COMPLEMENT)
+			+ MIN_COMPLEMENT;
+		pal_len = min(a,b);
+		loop_len = max(a,b) - pal_len;
+	} while (loop_len < MIN_LOOP);
+	//fprintf(stderr, "mol_len=%zd, pal_len=%zd, loop_len=%zd\n", mol_len, pal_len, loop_len);
+	loopseq = seq + pal_len;
+
 
 	*full_len = 2*pal_len + loop_len;
 	fullseq = malloc(*full_len +1);
@@ -268,20 +235,14 @@ sim_bs_pal_mol(opt_t *opt, char *seq, size_t mol_len, int rev, size_t *full_len,
 	}
 
 	bs_copy(opt, fullseq, seq, pal_len, rev, 0);
-	if (star) {
-		// loop comes from original molecule, which will be BS-treated
-		bs_copy(opt, fullseq+pal_len, loopseq, loop_len, rev, 0);
+	// loop comes from original molecule, which will be BS-treated
+	bs_copy(opt, fullseq+pal_len, loopseq, loop_len, rev, 0);
 
-		// Star et al. palindromes are Bst filled, so methylation
-		// signal is lost on the bottom strand (bases in all contexts
-		// are BS converted, including CpGs).
-		bs_copy(opt, fullseq+pal_len+loop_len, seq, pal_len, !rev, 1);
-	} else {
-		// loop comes from hairpin, which is methylated
-		memcpy(fullseq+pal_len, loopseq, loop_len);
+	// Star et al. palindromes are Bst filled, so methylation
+	// signal is lost on the bottom strand (bases in all contexts
+	// are BS converted, including CpGs).
+	bs_copy(opt, fullseq+pal_len+loop_len, seq, pal_len, !rev, 1);
 
-		bs_copy(opt, fullseq+pal_len+loop_len, seq, pal_len, !rev, 0);
-	}
 
 	fullseq[*full_len] = '\0';
 err0:
@@ -462,7 +423,6 @@ simhbs(opt_t *opt)
 		} while (mol_len == 0 || pos < 1 || pos+mol_len >= opt->reflen);
 
 		switch (opt->mol_type) {
-			default:
 			case MOL_BSSEQ:
 				s = sim_bs_mol(opt, opt->refseq+pos,
 						mol_len, rev);
@@ -474,12 +434,11 @@ simhbs(opt_t *opt)
 				break;
 			case MOL_PAL_STAR:
 				s = sim_bs_pal_mol(opt, opt->refseq+pos,
-						mol_len, rev, &len, 1);
+						mol_len, rev, &len);
 				break;
-			case MOL_PAL_MODHP:
-				s = sim_bs_pal_mol(opt, opt->refseq+pos,
-						mol_len, rev, &len, 0);
-				break;
+			default:
+				fprintf(stderr, "unexpected opt->mol_type\n");
+				abort();
 		}
 
 		if (s == NULL) {
@@ -794,12 +753,11 @@ usage(char *argv0, opt_t *opt)
 	fprintf(stderr, " -b FLOAT       Bisulfite conversion rate [%.3f]\n", opt->bs_rate);
 	fprintf(stderr, " -e FLOAT       Sequencing error rate [%.3f]\n", opt->err_rate);
 	fprintf(stderr, " -E FILE1,FILE2 Empirical error profiles, from `qualprofile'\n");
-	fprintf(stderr, " -h             Simulate hairpin data [%s]\n",
-					((char *[]){"no", "yes"})[opt->mol_type==MOL_HAIRPIN]);
-	fprintf(stderr, " -p             Simulate palindromes (as in Star et al. 2014) [%s]\n",
-					((char *[]){"no", "yes"})[opt->mol_type==MOL_PAL_STAR]);
-	fprintf(stderr, " -P             Simulate palindromes (modified hairpin) [%s]\n",
-					((char *[]){"no", "yes"})[opt->mol_type==MOL_PAL_MODHP]);
+	fprintf(stderr, "                  FILE1 specifies the profile for read 1, FILE2 for read 2\n");
+	fprintf(stderr, " -m {bs,hp,pal} Molecule type to simulate, one of:\n");
+	fprintf(stderr, "                  bs - regular MethylC-seq [default]\n");
+	fprintf(stderr, "                  hp - hairpin-bisulfite seq\n");
+	fprintf(stderr, "                  pal - Star et al. (2014) palindromes, bisulfite treated\n");
 	fprintf(stderr, " -n INT         Number of sequences to simulate [%zd]\n", opt->n_seqs);
 	fprintf(stderr, " -o STR         Output prefix for fastq files [%s]\n", opt->oprefix);
 	fprintf(stderr, " -r INT         Read length [%zd]\n", opt->readlen);
@@ -839,7 +797,7 @@ main(int argc, char **argv)
 	// seed the random state
 	opt.state = kr_srand(time(NULL));
 
-	while ((c = getopt(argc, argv, "b:e:E:hpPn:o:u:s:")) != -1) {
+	while ((c = getopt(argc, argv, "b:e:E:m:n:o:u:s:")) != -1) {
 		switch (c) {
 			case 'b':
 				opt.bs_rate = atof(optarg);
@@ -860,29 +818,18 @@ main(int argc, char **argv)
 			case 'E':
 				profile_fn = optarg;
 				break;
-			case 'h':
-				if (opt.mol_type != MOL_BSSEQ) {
-					fprintf(stderr, "-h, -p, and -P are mutually exclusive\n");
+			case 'm':
+				if (!strcmp(optarg, "bs")) {
+					opt.mol_type = MOL_BSSEQ;
+				} else if (!strcmp(optarg, "hp")) {
+					opt.mol_type = MOL_HAIRPIN;
+				} else if (!strcmp(optarg, "pal")) {
+					opt.mol_type = MOL_PAL_STAR;
+				} else {
+					fprintf(stderr, "unknown molecule type: -m `%s'\n", optarg);
 					ret = -2;
 					goto err0;
 				}
-				opt.mol_type = MOL_HAIRPIN;
-				break;
-			case 'p':
-				if (opt.mol_type != MOL_BSSEQ) {
-					fprintf(stderr, "-h, -p, and -P are mutually exclusive\n");
-					ret = -2;
-					goto err0;
-				}
-				opt.mol_type = MOL_PAL_STAR;
-				break;
-			case 'P':
-				if (opt.mol_type != MOL_BSSEQ) {
-					fprintf(stderr, "-h, -p, and -P are mutually exclusive\n");
-					ret = -2;
-					goto err0;
-				}
-				opt.mol_type = MOL_PAL_MODHP;
 				break;
 			case 'n':
 				opt.n_seqs = strtoul(optarg, NULL, 0);
