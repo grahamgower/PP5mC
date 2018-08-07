@@ -1,4 +1,20 @@
 #!/usr/bin/env python
+#
+# Plot nucleotide pairing info, as output from `scanbp'.
+#
+# Copyright (c) 2016,2017 Graham Gower <graham.gower@gmail.com>
+#
+# Permission to use, copy, modify, and distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 from __future__ import print_function
 import sys
@@ -75,7 +91,7 @@ def parse_nt_pairing(filename, bpairs):
 
 def parse_args():
     import argparse
-    parser = argparse.ArgumentParser(description="plot nucleotide pairing info")
+    parser = argparse.ArgumentParser(description="plot nucleotide pairing info, as output from `scanbp'")
     parser.add_argument("--only5p", action="store_true", default=False, help="only plot 5' end")
     parser.add_argument("--scale", type=int, default=1, help="scale the plot")
     parser.add_argument("--title", help="text for title")

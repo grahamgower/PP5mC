@@ -54,6 +54,7 @@ def ribbonplot(ax, x, y, yerr, colour, label):
     ax.plot(x, y+yerr, color=colour, lw=0.5)
     ax.plot(x, y-yerr, color=colour, lw=0.5)
     ax.fill_between(x, y-yerr, y+yerr, color=colour, alpha=0.3)
+    ax.set_ylim(0,np.max(y+yerr))
 
 if __name__ == "__main__":
     if len(sys.argv) not in (3, 4):
