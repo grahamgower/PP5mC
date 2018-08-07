@@ -2,7 +2,6 @@
 # Align folded (single end) reads
 
 source ./fold.settings
-module load BWA/0.7.15-foss-2016b SAMtools/1.4.1-foss-2016b
 
 map() {
 	pfx=$1

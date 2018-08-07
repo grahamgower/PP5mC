@@ -1,8 +1,6 @@
 #!/bin/sh
 
 source ./fold.settings
-module load SAMtools/1.4.1-foss-2016b
-module load Java/1.8.0_101 GATK/3.6-Java-1.8.0_101
 
 # NOTE: -Xmx parameter is per thread
 java="java -Xmx2g"

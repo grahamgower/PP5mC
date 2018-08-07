@@ -1,7 +1,6 @@
 #!/bin/sh
 
 source ./fold.settings
-module load grg-utils
 
 fold() {
 	pfx=$1
@@ -30,12 +29,6 @@ fold() {
 	|| die "${pfx}: foldreads|pigz"
 
 	rm $f1 $f2
-
-	plot_fraglen_from_fasta.py \
-		--title ${pfx} \
-		${fq_out} \
-		${pfx}.folded.length-histogram.pdf \
-	|| die "${pfx}: plot_fraglen_from_fasta.py"
 }
 
 for s in $sample_lib_pairs; do

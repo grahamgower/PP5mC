@@ -49,8 +49,18 @@ sort_threads_per_sample=$nthreads # don't set this too high,
 # Kills all subprocesses when parent process is killed (e.g. by CTRL-C).
 #trap 'kill 0' EXIT
 
+# Make exit status propagate through pipes.
+set -o pipefail
+
 # Print error message and exit.
 die() {
 	echo Error: $@
 	exit 1
 }
+
+## load Environment Modules here, as required
+#module load grg-utils
+#module load paleomix-meta
+#module load BWA/0.7.15-foss-2016b
+#module load SAMtools/1.4.1-foss-2016b
+#module load Java/1.8.0_101 GATK/3.6-Java-1.8.0_101

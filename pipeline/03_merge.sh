@@ -2,7 +2,6 @@
 # merge different libraries for the same sample
 
 source ./fold.settings
-module load SAMtools/1.4.1-foss-2016b
 
 merge()
 {

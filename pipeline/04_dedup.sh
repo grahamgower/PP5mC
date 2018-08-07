@@ -1,8 +1,6 @@
 #!/bin/sh
 
 source ./fold.settings
-module load paleomix-meta
-module load SAMtools/1.4.1-foss-2016b
 
 dedup() {
 	pfx=$1
