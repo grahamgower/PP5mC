@@ -1,2 +1,9 @@
 *.pyc
 *.swp
+*.o
+*.fa
+foldreads
+scanbp
+mark5mC
+simhbs
+qualprofile
