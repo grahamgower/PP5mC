@@ -15,13 +15,13 @@ Pipeline stages:
 5.  Merge libraries for the same sample (`samtools merge`).
 6.  Realign around indels (1. `$gatk -T RealignerTargetCreator`,
     2. `$gatk -T IndelRealigner`, 3. `samtools calmd`).
-7.  Mark C/5mC states for each locus, from the pileup (`PP5mC/mark_5mC`).
+7.  Mark C/5mC states for each locus, from the pileup (`PP5mC/mark5mC`).
 8.  Summary statistics and plots (`PP5mC/scanbp`).
 9.  `samtools flagstat`
 10. `samtools stat`
-10. `samtools bedcov`
+11. `samtools bedcov`
 
-The pipeline does not do variant calling.
+The pipeline does not do variant calling or differential methylation analysis.
 
 Installation
 ============
@@ -261,13 +261,12 @@ Sample1.UMD11.pileOmeth.{CpG,CHG,CHH}.txt.gz
 
 In order to best utilise cluster resources, run the pipeline on a subset
 of your data first, using a relaxed set of resource constraints.
-We provide a script (`res.py`) to be run on the output of 
+We provide a script (`sacct2res.py`), which takes your config file and
+dependency_graph as parameters, to query Slurm regarding resource usage
+for completed jobs.  The script then outputs values for use in the config
+file's resources stanza.
 
 ```
+sacct2res.py config.json dependency_graph
 ```
 
-
-Troubleshooting
----------------
-
-This software has no bugs. :P
