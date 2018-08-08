@@ -5,4 +5,5 @@ tested only on a CentOS Linux system, but should work with few if any changes
 in other environments (e.g. MacOSX).
 
 Start by editing `fold.settings`, and **PLEASE** read the scripts before
-running them.
+running them.  In particular, fastq naming conventions may not match your data,
+and paths to programs such as GATK likely need to be changed.
