@@ -1,5 +1,5 @@
 /*
- * Obtain pairing information from XF bam field.
+ * Obtain pairing information from HBS-seq info in optional bam fields.
  *
  * Copyright (c) 2016-2018 Graham Gower <graham.gower@gmail.com>
  *
