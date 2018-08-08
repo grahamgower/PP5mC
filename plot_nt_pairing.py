@@ -93,7 +93,7 @@ def parse_args():
     import argparse
     parser = argparse.ArgumentParser(description="plot nucleotide pairing info, as output from `scanbp'")
     parser.add_argument("--only5p", action="store_true", default=False, help="only plot 5' end")
-    parser.add_argument("--scale", type=int, default=1, help="scale the plot")
+    parser.add_argument("--scale", type=float, default=1, help="scale the plot")
     parser.add_argument("--title", help="text for title")
     parser.add_argument("infile", help="input pairs.txt")
     parser.add_argument("outfile", help="output pairs.pdf")
@@ -145,17 +145,15 @@ if __name__ == "__main__":
 
     ctx5p_pos, ctx5p, ctx3p_pos, ctx3p = parse_nt_pairing(args.infile, set(pairlist))
     #ctx3p_pos = list(range(29,-31,-1))
+    ctx3p_pos = np.array(ctx3p_pos)+1
 
     plot_file = args.outfile
     pdf = PdfPages(plot_file)
 
-    scale = 1
     #fig_w, fig_h = plt.figaspect(9.0/32.0)
     fig_w, fig_h = plt.figaspect(9.0/16.0)
     #fig_w, fig_h = plt.figaspect(3.0/4.0)
-    fig1 = plt.figure(figsize=(scale*fig_w, scale*fig_h))
-    #fig1 = plt.figure(figsize=(fig_w, fig_h))
-    #fig1 = plt.figure(figsize=(scale*11.69, scale*8.27), dpi=100)
+    fig1 = plt.figure(figsize=(args.scale*fig_w, args.scale*fig_h))
 
     gs1 = gridspec.GridSpec(2, 9)
     if args.only5p:
@@ -175,9 +173,9 @@ if __name__ == "__main__":
 
     alpha = 1.0
     linestyle = ":"
-    linewidth = scale*1.0
-    markeredgewidth = scale*0.5
-    markersize = scale*5
+    linewidth = args.scale*1.0
+    markeredgewidth = args.scale*0.5
+    markersize = args.scale*5
     vlinestyle = "--"
     vlinecolour = "black"
     vlinealpha = 0.5
@@ -186,8 +184,8 @@ if __name__ == "__main__":
         ax1.axvline(0, color=vlinecolour, markeredgecolor=vlinecolour, linestyle=vlinestyle, alpha=vlinealpha)
         ax3.axvline(0, color=vlinecolour, markeredgecolor=vlinecolour, linestyle=vlinestyle, alpha=vlinealpha)
     if not args.only5p and min(ctx3p_pos) < 0:
-        ax2.axvline(-1, color=vlinecolour, markeredgecolor=vlinecolour, linestyle=vlinestyle, alpha=vlinealpha)
-        ax4.axvline(-1, color=vlinecolour, markeredgecolor=vlinecolour, linestyle=vlinestyle, alpha=vlinealpha)
+        ax2.axvline(0, color=vlinecolour, markeredgecolor=vlinecolour, linestyle=vlinestyle, alpha=vlinealpha)
+        ax4.axvline(0, color=vlinecolour, markeredgecolor=vlinecolour, linestyle=vlinestyle, alpha=vlinealpha)
     
     for i, label in enumerate(pairlist):
         pairs_5p = ctx5p[label]
@@ -247,7 +245,7 @@ if __name__ == "__main__":
         title = "Observed pairing frequencies ({})".format(args.title)
     else:
         title = "Observed pairing frequencies"
-    fig1.suptitle(title, fontsize=int(np.sqrt(scale)*12))
+    fig1.suptitle(title, fontsize=int(np.sqrt(args.scale)*12))
 
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     pdf.savefig()
