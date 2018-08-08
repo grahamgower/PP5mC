@@ -104,13 +104,13 @@ randsubst(opt_t *opt, char c)
 {
 	switch (c) {
 		case 'A':
-			return "CGT"[(int)kr_drand(opt->state)*3];
+			return "CGT"[kr_drand(opt->state)%3];
 		case 'C':
-			return "AGT"[(int)kr_drand(opt->state)*3];
+			return "AGT"[kr_drand(opt->state)%3];
 		case 'G':
-			return "ACT"[(int)kr_drand(opt->state)*3];
+			return "ACT"[kr_drand(opt->state)%3];
 		case 'T':
-			return "ACG"[(int)kr_drand(opt->state)*3];
+			return "ACG"[kr_drand(opt->state)%3];
 		default:
 		case 'N':
 			return randnt(opt);
