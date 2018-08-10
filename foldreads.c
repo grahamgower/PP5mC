@@ -319,7 +319,7 @@ foldreads_pe(const opt_t *opt, metrics_t *metrics)
 
 			if (hindex != -1) {
 				struct hairpin *h = opt->hplist + hindex;
-				fprintf(opt->fos, " hp:Z:%s", h->fwd->s);
+				fprintf(opt->fos, "\thp:Z:%s", h->fwd->s);
 				metrics->hp_hist[hindex]++;
 			}
 
