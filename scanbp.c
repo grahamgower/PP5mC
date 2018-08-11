@@ -36,6 +36,7 @@ typedef struct {
 	char *bed_fn;
 	int min_mapq;
 	int min_baseq;
+	int mandate_hairpin;
 	FILE *metrics_fp;
 } opt_t;
 
@@ -112,14 +113,27 @@ next_aln(void *data, bam1_t *b)
 			break;
 		}
 
+		if (bat->opt->mandate_hairpin && !hp)
+			continue;
+
 		len = strlen(s1);
 		hplen = hp ? strlen(hp) : 0;
 		hppos = b->core.l_qseq;
 
-		clean_quals(s1, q1, len, PHRED_SCALE);
-		clean_quals(s2, q2, len, PHRED_SCALE);
-		if (hplen)
+		if (hplen) {
+			int i;
+			clean_quals(s1, q1, len, PHRED_SCALE);
+			clean_quals(s2, q2, len, PHRED_SCALE);
 			correct_s1s2(s1, q1, len, s2, q2, len, hplen, hppos);
+			/* Restore PHRED+33 values, to keep within
+			 * the correct range for aux fields and
+			 * maintain ignorance of htslib internals.
+			 */
+			for (i=0; i<len; i++) {
+				q1[i] += PHRED_SCALE;
+				q2[i] += PHRED_SCALE;
+			}
+		}
 
 		break;
 	}
@@ -156,6 +170,7 @@ scanbp(opt_t *opt)
 	int x, y;
 	int i;
 	int ret;
+	int min_baseq33 = opt->min_baseq + PHRED_SCALE;
 
 	int win_tid, win_pos;
 	uint16_t win_dp[WIN_SZ];
@@ -262,7 +277,7 @@ scanbp(opt_t *opt)
 					//fprintf(stderr, "[+]%s  %d:%d:%d  %c/%c\n", bam_get_qname(p->b), pos, p->qpos, i, ci, cj);
 				}
 
-				if (qi < opt->min_baseq || qj < opt->min_baseq)
+				if (qi < min_baseq33 || qj < min_baseq33)
 					continue;
 
 				win[wi*MAX_DP + dp] = nt2int[(int)ci]<<2 | nt2int[(int)cj];
@@ -317,6 +332,9 @@ scanbp(opt_t *opt)
 				goto err4;
 			}
 
+			if (opt->mandate_hairpin && !hp)
+				continue;
+
 			len = strlen(s1);
 			hlen = hp ? strlen(hp) : 0;
 
@@ -334,7 +352,7 @@ scanbp(opt_t *opt)
 					cj = s1[sx];
 					qi = q2[sx];
 					qj = q1[sx];
-					if (qi >= opt->min_baseq && qj >= opt->min_baseq)
+					if (qi >= min_baseq33 && qj >= min_baseq33)
 						ctx5p[CTX_SZ+x][(nt2int[(int)ci]<<2)|nt2int[(int)cj]]++;
 
 					if (!hairpin)
@@ -346,7 +364,7 @@ scanbp(opt_t *opt)
 					cj = s1[sx];
 					qi = q2[sx];
 					qj = q1[sx];
-					if (qi >= opt->min_baseq && qj >= opt->min_baseq)
+					if (qi >= min_baseq33 && qj >= min_baseq33)
 						ctx3p[CTX_SZ-x-1][(nt2int[(int)ci]<<2)|nt2int[(int)cj]]++;
 				}
 
@@ -377,7 +395,7 @@ scanbp(opt_t *opt)
 					cj = cmap[(int)s2[sx]];
 					qi = q1[sx];
 					qj = q2[sx];
-					if (qi >= opt->min_baseq && qj >= opt->min_baseq)
+					if (qi >= min_baseq33 && qj >= min_baseq33)
 						ctx5p[CTX_SZ+x][(nt2int[(int)ci]<<2)|nt2int[(int)cj]]++;
 
 					if (!hairpin)
@@ -389,7 +407,7 @@ scanbp(opt_t *opt)
 					cj = cmap[(int)s2[sx]];
 					qi = q1[sx];
 					qj = q2[sx];
-					if (qi >= opt->min_baseq && qj >= opt->min_baseq)
+					if (qi >= min_baseq33 && qj >= min_baseq33)
 						ctx3p[CTX_SZ-x-1][(nt2int[(int)ci]<<2)|nt2int[(int)cj]]++;
 				}
 
@@ -473,7 +491,8 @@ void
 usage(char *argv0)
 {
 	fprintf(stderr, "scanbp v%s\n", FOLDREADS_VERSION);
-	fprintf(stderr, "usage: %s in.bam\n", argv0);
+	fprintf(stderr, "usage: %s [...] in.bam\n", argv0);
+	fprintf(stderr, " -p                Only consider reads in which a hairpin was found\n");
 	exit(1);
 }
 
@@ -488,9 +507,13 @@ main(int argc, char **argv)
 	opt.min_mapq = 25;
 	opt.min_baseq = 10;
 	opt.metrics_fp = stdout;
+	opt.mandate_hairpin = 0;
 
-	while ((c = getopt(argc, argv, "")) != -1) {
+	while ((c = getopt(argc, argv, "p")) != -1) {
 		switch (c) {
+			case 'p':
+				opt.mandate_hairpin = 1;
+				break;
 			default:
 				usage(argv[0]);
 		}

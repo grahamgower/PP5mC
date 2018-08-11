@@ -231,10 +231,19 @@ next_aln(void *data, bam1_t *b)
 		hplen = hp ? strlen(hp) : 0;
 		hppos = b->core.l_qseq;
 
-		clean_quals(s1, q1, len, PHRED_SCALE);
-		clean_quals(s2, q2, len, PHRED_SCALE);
-		if (hplen)
+		if (hplen) {
+			int i;
+			clean_quals(s1, q1, len, PHRED_SCALE);
+			clean_quals(s2, q2, len, PHRED_SCALE);
 			correct_s1s2(s1, q1, len, s2, q2, len, hplen, hppos);
+			/* Restore PHRED+33 range of values,
+			 * to maintain ignorance of htslib internals.
+			 */
+			for (i=0; i<len; i++) {
+				q1[i] += PHRED_SCALE;
+				q2[i] += PHRED_SCALE;
+			}
+		}
 
 		break;
 	}
@@ -319,6 +328,7 @@ mark5mC(opt_t *opt)
 	int tid, pos, n;
 	int i;
 	int ret;
+	int min_baseq33 = opt->min_baseq + PHRED_SCALE;
 
 	memset(&bat, 0, sizeof(bam_aux_t));
 	bat.opt = opt;
@@ -427,7 +437,7 @@ mark5mC(opt_t *opt)
 						hclip>0?"HCLIP":"", hclip);
 			}*/
 
-			if (qi < opt->min_baseq || qj < opt->min_baseq)
+			if (qi < min_baseq33 || qj < min_baseq33)
 				continue;
 
 			int pair = nt2int[(int)ci]<<2 | nt2int[(int)cj];
