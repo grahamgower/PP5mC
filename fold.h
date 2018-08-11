@@ -1,7 +1,7 @@
 #ifndef _FOLD_H
 #define _FOLD_H
 
-#define FOLDREADS_VERSION "11"
+#define FOLDREADS_VERSION "12"
 
 // max Q value for output
 #define Q_MAX 40
