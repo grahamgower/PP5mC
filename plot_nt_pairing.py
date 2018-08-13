@@ -171,6 +171,9 @@ if __name__ == "__main__":
         ax4.yaxis.tick_right()
         ax4.tick_params(right="on", left="on")
 
+    ax1.tick_params(right="on", left="on")
+    ax3.tick_params(right="on", left="on")
+
     alpha = 1.0
     linestyle = ":"
     linewidth = args.scale*1.0
