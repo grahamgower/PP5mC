@@ -231,7 +231,7 @@ next_aln(void *data, bam1_t *b)
 		hplen = hp ? strlen(hp) : 0;
 		hppos = b->core.l_qseq;
 
-		if (hplen) {
+		if (hppos+hplen < len) {
 			int i;
 			clean_quals(s1, q1, len, PHRED_SCALE);
 			clean_quals(s2, q2, len, PHRED_SCALE);
