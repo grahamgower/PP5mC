@@ -2,7 +2,7 @@
 #
 # Plot nucleotide pairing info, as output from `scanbp'.
 #
-# Copyright (c) 2016,2017 Graham Gower <graham.gower@gmail.com>
+# Copyright (c) 2016-2018 Graham Gower <graham.gower@gmail.com>
 #
 # Permission to use, copy, modify, and distribute this software for any
 # purpose with or without fee is hereby granted, provided that the above
@@ -21,12 +21,14 @@ import sys
 import matplotlib
 matplotlib.use('Agg') # don't try to use $DISPLAY
 import matplotlib.pyplot as plt
+from matplotlib import rc
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.gridspec as gridspec
 import matplotlib.patches as mpatches
 from pylab import setp
 import numpy as np
 import collections
+
 
 class ParseError(Exception):
     pass
@@ -50,7 +52,7 @@ def parse_nt_pairing(filename, bpairs):
 
             if line.startswith("#CTX5p"):
                 ctx5p_pairs = line.split("\t")[2:]
-                if bpairs != set(ctx5p_pairs):
+                if not bpairs.issubset(set(ctx5p_pairs)):
                     raise ParseError("{}: line {}: missing pairs.".format(filename, lineno))
 
                 continue
@@ -70,7 +72,7 @@ def parse_nt_pairing(filename, bpairs):
 
             if line.startswith("#CTX3p"):
                 ctx3p_pairs = line.split("\t")[2:]
-                if bpairs != set(ctx3p_pairs):
+                if not bpairs.issubset(set(ctx3p_pairs)):
                     raise ParseError("{}: line {}: missing pairs.".format(filename, lineno))
                 continue
 
@@ -119,16 +121,20 @@ if __name__ == "__main__":
             "pink":"#ffcdf3",
             "white":"#ffffff"}
 
-    pairlist = ("A/T", "T/A", "G/T", "T/G", "G/C", "C/G",
-            "A/C", "C/A", "A/G", "G/A", "C/T", "T/C",
-            "A/A", "C/C", "G/G", "T/T")
+    #pairlist = ("A/T", "T/A", "G/T", "T/G", "G/C", "C/G",
+    #        "A/C", "C/A", "A/G", "G/A", "C/T", "T/C",
+    #        "A/A", "C/C", "G/G", "T/T")
+    pairlist = ("A/T", "T/A", "G/T", "T/G", "G/C", "C/G")
+
+    labels = ("A/T", "T/A", "G/C", "C/G", "G/mC", "mC/G")
+
     pair2sym = {
             "A/T": ('o', "cyan", "cyan"),
-            "T/A": ('o', "orange", "orange"),
-            "G/T": ('*', "blue", "blue"),
-            "T/G": ('*', "yellow", "blue"),
-            "G/C": ('s', "red", "red"),
-            "C/G": ('d', "green", "green"),
+            "T/A": ('v', "orange", "orange"),
+            "G/T": ('*', "green", "green"),
+            "T/G": ('p', "yellow", "blue"),
+            "G/C": ('s', "tan", "brown"),
+            "C/G": ('d', "pink", "red"),
 
             "A/C": ('v', "cyan", "yellow"),
             "C/A": ('v', "yellow", "green"),
@@ -144,7 +150,6 @@ if __name__ == "__main__":
             }
 
     ctx5p_pos, ctx5p, ctx3p_pos, ctx3p = parse_nt_pairing(args.infile, set(pairlist))
-    #ctx3p_pos = list(range(29,-31,-1))
     ctx3p_pos = np.array(ctx3p_pos)+1
 
     plot_file = args.outfile
@@ -155,24 +160,17 @@ if __name__ == "__main__":
     #fig_w, fig_h = plt.figaspect(3.0/4.0)
     fig1 = plt.figure(figsize=(args.scale*fig_w, args.scale*fig_h))
 
-    gs1 = gridspec.GridSpec(2, 9)
+    gs1 = gridspec.GridSpec(10, 8)
     if args.only5p:
-        ax1 = fig1.add_subplot(gs1[0,:8])
-        ax3 = fig1.add_subplot(gs1[1,:8], sharex=ax1)
+        ax1 = fig1.add_subplot(gs1[:9,:8])
     else:
-        ax1 = fig1.add_subplot(gs1[0,:4])
-        ax2 = fig1.add_subplot(gs1[0,-4:], sharey=ax1)
-        ax3 = fig1.add_subplot(gs1[1,:4], sharex=ax1)
-        ax4 = fig1.add_subplot(gs1[1,-4:], sharey=ax3, sharex=ax2)
+        ax1 = fig1.add_subplot(gs1[:9,:4])
+        ax2 = fig1.add_subplot(gs1[:9,-4:], sharey=ax1)
         ax2.invert_xaxis()
-    #    ax4.invert_xaxis()
         ax2.yaxis.tick_right()
         ax2.tick_params(right="on", left="on")
-        ax4.yaxis.tick_right()
-        ax4.tick_params(right="on", left="on")
 
     ax1.tick_params(right="on", left="on")
-    ax3.tick_params(right="on", left="on")
 
     alpha = 1.0
     linestyle = ":"
@@ -185,72 +183,51 @@ if __name__ == "__main__":
 
     if min(ctx5p_pos) < 0:
         ax1.axvline(0, color=vlinecolour, markeredgecolor=vlinecolour, linestyle=vlinestyle, alpha=vlinealpha)
-        ax3.axvline(0, color=vlinecolour, markeredgecolor=vlinecolour, linestyle=vlinestyle, alpha=vlinealpha)
     if not args.only5p and min(ctx3p_pos) < 0:
         ax2.axvline(0, color=vlinecolour, markeredgecolor=vlinecolour, linestyle=vlinestyle, alpha=vlinealpha)
-        ax4.axvline(0, color=vlinecolour, markeredgecolor=vlinecolour, linestyle=vlinestyle, alpha=vlinealpha)
     
-    for i, label in enumerate(pairlist):
-        pairs_5p = ctx5p[label]
-        pairs_3p = ctx3p[label]
-        c1 = pal16d[pair2sym[label][1]]
-        c2 = pal16d[pair2sym[label][2]]
-        m = pair2sym[label][0]
+    for i, (pair, label) in enumerate(zip(pairlist,labels)):
+        pairs_5p = ctx5p[pair]
+        pairs_3p = ctx3p[pair]
+        c1 = pal16d[pair2sym[pair][1]]
+        c2 = pal16d[pair2sym[pair][2]]
+        m = pair2sym[pair][0]
 
-        if np.mean(pairs_5p) > 0.1:
-            ax5p = ax1
-        else:
-            ax5p = ax3
-
-        if not args.only5p:
-            if np.mean(pairs_3p) > 0.1:
-                ax3p = ax2
-            else:
-                ax3p = ax4
-
-        ax5p.plot(ctx5p_pos, pairs_5p, color=c1, markeredgecolor=c2,
+        ax1.plot(ctx5p_pos, pairs_5p, color=c2, markerfacecolor=c1, markeredgecolor=c2,
                 marker=m, markersize=markersize, markeredgewidth=markeredgewidth,
                 linestyle=linestyle, linewidth=linewidth,
                 alpha=alpha, label=label)
         if not args.only5p:
-            ax3p.plot(ctx3p_pos, pairs_3p, color=c1, markeredgecolor=c2,
+            ax2.plot(ctx3p_pos, pairs_3p, color=c2, markerfacecolor=c1, markeredgecolor=c2,
                     marker=m, markersize=markersize, markeredgewidth=markeredgewidth,
                     linestyle=linestyle, linewidth=linewidth,
                     alpha=alpha, label=label)
 
-    ax3.set_xlim(min(ctx5p_pos)-0.5, max(ctx5p_pos)+0.5)
-    #ax3.set_xlim(-20.5, 25.5)
-    setp(ax1.get_xticklabels(), visible=False)
-    #setp(ax2.get_yticklabels(), visible=False)
+    ax1.set_xlim(min(ctx5p_pos)-0.5, max(ctx5p_pos)+0.5)
+    ax2.set_xlim(min(ctx3p_pos)-0.5, max(ctx3p_pos)+0.5)
 
     if not args.only5p:
-        ax4.set_xlim(min(ctx3p_pos)-0.5, max(ctx3p_pos)+0.5)
-        #ax4.set_xlim(-20.5, 25.5)
-
-        setp(ax2.get_xticklabels(), visible=False)
-        #setp(ax4.get_yticklabels(), visible=False)
-        ax4.yaxis.set_label_position("right")
+        ax2.set_xlim(min(ctx3p_pos)-0.5, max(ctx3p_pos)+0.5)
+        ax2.yaxis.set_label_position("right")
 
     ax1_handles,ax1_labels = ax1.get_legend_handles_labels()
     empty = mpatches.Patch(color='white')
     handles = [empty] + ax1_handles
-    labels = ['+/-'] + ax1_labels
+    labels = ["+/-"] + ax1_labels
 
-    ax1.legend(handles, labels, numpoints=1, frameon=False, loc='center left', bbox_to_anchor=(1.01, 0.75))
-    ax3.legend(numpoints=1, frameon=False, loc='center left', bbox_to_anchor=(1.01, 0.75))
-
-    ax3.set_xlabel("Distance from p5/p7")
+    ax1.set_xlabel("Distance from $5'$ end of $+$ strand", labelpad=10)
     if not args.only5p:
-        ax4.set_xlabel("Distance from hairpin")
-    ax1.set_ylabel("Frequency", labelpad=20, y=-0.15)
+        ax2.set_xlabel("Distance from $3'$ end of $+$ strand", labelpad=10)
+    ax1.set_ylabel("Frequency", labelpad=10)
+
+    leg = ax1.legend(handles, labels, numpoints=1, frameon=True, ncol=len(labels), loc='upper center', bbox_to_anchor=(1.01, -0.16))
 
     if args.title:
-        title = "Observed pairing frequencies ({})".format(args.title)
+        title = "Base pair frequencies ({})".format(args.title)
     else:
-        title = "Observed pairing frequencies"
+        title = "Base pair frequencies"
     fig1.suptitle(title, fontsize=int(np.sqrt(args.scale)*12))
 
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.tight_layout(rect=[0, 0.06, 1, 0.95])
     pdf.savefig()
-#    pdf.savefig(papertype="a4", orientation="landscape")
     pdf.close()
