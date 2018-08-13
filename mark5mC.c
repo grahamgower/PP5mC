@@ -227,8 +227,11 @@ next_aln(void *data, bam1_t *b)
 			break;
 		}
 
+		if (!hp)
+			break;
+
 		len = strlen(s1);
-		hplen = hp ? strlen(hp) : 0;
+		hplen = strlen(hp);
 		hppos = b->core.l_qseq;
 
 		if (hppos+hplen < len) {

@@ -55,7 +55,7 @@ typedef struct {
 #define min(a,b) ((a)<(b)?(a):(b))
 #define max(a,b) ((a)>(b)?(a):(b))
 
-static int nt2int[256] = {['A']=0, ['C']=1, ['G']=2, ['T']=3};
+static int nt2int[256] = {['A']=0, ['C']=1, ['G']=2, ['T']=3, ['a']=0, ['c']=1, ['g']=2, ['t']=3};
 static char cmap[] = {['A']='T', ['C']='G', ['G']='C', ['T']='A', ['N']='N', ['n']='N',
 				['a']='t', ['c']='g', ['g']='c', ['t']='a'};
 
@@ -116,8 +116,11 @@ next_aln(void *data, bam1_t *b)
 		if (bat->opt->mandate_hairpin && !hp)
 			continue;
 
+		if (!hp)
+			break;
+
 		len = strlen(s1);
-		hplen = hp ? strlen(hp) : 0;
+		hplen = strlen(hp);
 		hppos = b->core.l_qseq;
 
 		if (hppos+hplen < len) {
@@ -304,8 +307,6 @@ scanbp(opt_t *opt)
 		 */
 		while (sam_itr_next(bat.bam_fp, bat.bam_iter, b) >= 0) {
 			char *s1, *s2, *q1, *q2, *hp;
-			size_t len, hlen;
-			int hairpin;
 			int ci, cj, qi, qj;
 			int sx;
 
@@ -335,14 +336,6 @@ scanbp(opt_t *opt)
 			if (opt->mandate_hairpin && !hp)
 				continue;
 
-			len = strlen(s1);
-			hlen = hp ? strlen(hp) : 0;
-
-			if (b->core.l_qseq+hlen < len)
-				hairpin = 1;
-			else
-				hairpin = 0;
-
 			if (bam_is_rev(b)) {
 				// within the read
 				for (x=0; x<CTX_SZ; x++) {
@@ -355,7 +348,7 @@ scanbp(opt_t *opt)
 					if (qi >= min_baseq33 && qj >= min_baseq33)
 						ctx5p[CTX_SZ+x][(nt2int[(int)ci]<<2)|nt2int[(int)cj]]++;
 
-					if (!hairpin)
+					if (!hp)
 						continue;
 
 					// 3'
@@ -375,15 +368,15 @@ scanbp(opt_t *opt)
 				for (x=0; x<CTX_SZ; x++) {
 					// upstream
 					y = wcache_select(win, win_dp, off5p+CTX_SZ-x-1);
-					if (y > 0)
+					if (y >= 0)
 						ctx5p[x][nt16rev[y]]++;
 
-					if (!hairpin)
+					if (!hp)
 						continue;
 
 					// downstream
 					y = wcache_select(win, win_dp, off3p-x-1);
-					if (y > 0)
+					if (y >= 0)
 						ctx3p[CTX_SZ+x][nt16rev[y]]++;
 				}
 			} else {
@@ -398,7 +391,7 @@ scanbp(opt_t *opt)
 					if (qi >= min_baseq33 && qj >= min_baseq33)
 						ctx5p[CTX_SZ+x][(nt2int[(int)ci]<<2)|nt2int[(int)cj]]++;
 
-					if (!hairpin)
+					if (!hp)
 						continue;
 
 					// 3'
@@ -418,15 +411,15 @@ scanbp(opt_t *opt)
 				for (x=0; x<CTX_SZ; x++) {
 					// upstream
 					y = wcache_select(win, win_dp, off5p-CTX_SZ+x);
-					if (y > 0)
+					if (y >= 0)
 						ctx5p[x][y]++;
 
-					if (!hairpin)
+					if (!hp)
 						continue;
 
 					// downstream
 					y = wcache_select(win, win_dp, off3p+x);
-					if (y > 0)
+					if (y >= 0)
 						ctx3p[CTX_SZ+x][y]++;
 				}
 			}
