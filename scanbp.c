@@ -99,7 +99,7 @@ next_aln(void *data, bam1_t *b)
 			break;
 		}
 
-		if (b->core.flag & (BAM_FUNMAP | BAM_FQCFAIL | BAM_FDUP) ||
+		if (b->core.flag & (BAM_FUNMAP|BAM_FSECONDARY|BAM_FQCFAIL|BAM_FDUP|BAM_FSUPPLEMENTARY) ||
 				b->core.qual < bat->opt->min_mapq)
 			// skip these
 			continue;
@@ -254,8 +254,8 @@ scanbp(opt_t *opt)
 				if (p->is_del || p->is_refskip)
 					continue;
 				
-				if (bam_get_qual(p->b)[p->qpos] < opt->min_baseq)
-					continue;
+				//if (bam_get_qual(p->b)[p->qpos] < opt->min_baseq)
+				//	continue;
 
 				if (aux2rrqqhp(p->b, &s1, &s2, &q1, &q2, &hp) < 0) {
 					fprintf(stderr, "aux2rrqqhp:1: failed\n");
@@ -313,10 +313,11 @@ scanbp(opt_t *opt)
 			//if (b->core.pos < win_pos || b->core.pos >= win_pos+WIN_SZ)
 			//	continue;
 
-			if (b->core.flag & (BAM_FUNMAP|BAM_FSECONDARY|BAM_FQCFAIL|BAM_FDUP|BAM_FSUPPLEMENTARY))
+			if (b->core.flag & (BAM_FUNMAP|BAM_FSECONDARY|BAM_FQCFAIL|BAM_FDUP|BAM_FSUPPLEMENTARY) ||
+					b->core.qual < opt->min_mapq)
 				continue;
 
-			if (b->core.l_qseq < 2*CTX_SZ)
+			if (b->core.l_qseq < CTX_SZ)
 				continue;
 
 			/*
