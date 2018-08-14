@@ -21,7 +21,6 @@ import sys
 import matplotlib
 matplotlib.use('Agg') # don't try to use $DISPLAY
 import matplotlib.pyplot as plt
-from matplotlib import rc
 from matplotlib.backends.backend_pdf import PdfPages
 import matplotlib.gridspec as gridspec
 import matplotlib.patches as mpatches
@@ -97,6 +96,8 @@ def parse_args():
     parser.add_argument("--only5p", action="store_true", default=False, help="only plot 5' end")
     parser.add_argument("--scale", type=float, default=1, help="scale the plot")
     parser.add_argument("--title", help="text for title")
+    parser.add_argument("--ratio4x3", action="store_true", default=False, help="plot 4x3 ratio")
+    parser.add_argument("--allpairs", action="store_true", default=False, help="plot all base pairs, not just canonical pairs")
     parser.add_argument("infile", help="input pairs.txt")
     parser.add_argument("outfile", help="output pairs.pdf")
     return parser.parse_args()
@@ -121,12 +122,14 @@ if __name__ == "__main__":
             "pink":"#ffcdf3",
             "white":"#ffffff"}
 
-    #pairlist = ("A/T", "T/A", "G/T", "T/G", "G/C", "C/G",
-    #        "A/C", "C/A", "A/G", "G/A", "C/T", "T/C",
-    #        "A/A", "C/C", "G/G", "T/T")
-    pairlist = ("A/T", "T/A", "G/T", "T/G", "G/C", "C/G")
-
-    labels = ("A/T", "T/A", "G/C", "C/G", "G/mC", "mC/G")
+    if args.allpairs:
+        pairlist = ("A/T", "T/A", "G/T", "T/G", "G/C", "C/G",
+                "A/C", "C/A", "A/G", "G/A", "C/T", "T/C",
+                "A/A", "C/C", "G/G", "T/T")
+        labels = pairlist
+    else:
+        pairlist = ("A/T", "T/A", "G/T", "T/G", "G/C", "C/G")
+        labels = ("A/T", "T/A", "G/C", "C/G", "G/mC", "mC/G")
 
     pair2sym = {
             "A/T": ('o', "cyan", "cyan"),
@@ -136,15 +139,15 @@ if __name__ == "__main__":
             "G/C": ('s', "tan", "brown"),
             "C/G": ('d', "pink", "red"),
 
-            "A/C": ('v', "cyan", "yellow"),
+            "A/C": ('v', "cyan", "red"),
             "C/A": ('v', "yellow", "green"),
             "A/G": ('^', "blue", "tan"),
             "G/A": ('^', "orange", "blue"),
-            "C/T": ('>', "red", "lightgreen"),
+            "C/T": ('>', "red", "red"),
             "T/C": ('>', "cyan", "brown"),
 
-            "A/A": ('<', "tan", "brown"),
-            "C/C": ('x', "pink", "red"),
+            "A/A": ('<', "tan", "orange"),
+            "C/C": ('x', "black", "black"),
             "G/G": ('h', "pink", "blue"),
             "T/T": ('p', "tan", "green")
             }
@@ -155,9 +158,10 @@ if __name__ == "__main__":
     plot_file = args.outfile
     pdf = PdfPages(plot_file)
 
-    #fig_w, fig_h = plt.figaspect(9.0/32.0)
-    fig_w, fig_h = plt.figaspect(9.0/16.0)
-    #fig_w, fig_h = plt.figaspect(3.0/4.0)
+    if args.ratio4x3:
+        fig_w, fig_h = plt.figaspect(3.0/4.0)
+    else:
+        fig_w, fig_h = plt.figaspect(9.0/16.0)
     fig1 = plt.figure(figsize=(args.scale*fig_w, args.scale*fig_h))
 
     gs1 = gridspec.GridSpec(10, 8)
@@ -185,7 +189,7 @@ if __name__ == "__main__":
         ax1.axvline(0, color=vlinecolour, markeredgecolor=vlinecolour, linestyle=vlinestyle, alpha=vlinealpha)
     if not args.only5p and min(ctx3p_pos) < 0:
         ax2.axvline(0, color=vlinecolour, markeredgecolor=vlinecolour, linestyle=vlinestyle, alpha=vlinealpha)
-    
+
     for i, (pair, label) in enumerate(zip(pairlist,labels)):
         pairs_5p = ctx5p[pair]
         pairs_3p = ctx3p[pair]
@@ -210,17 +214,30 @@ if __name__ == "__main__":
         ax2.set_xlim(min(ctx3p_pos)-0.5, max(ctx3p_pos)+0.5)
         ax2.yaxis.set_label_position("right")
 
-    ax1_handles,ax1_labels = ax1.get_legend_handles_labels()
-    empty = mpatches.Patch(color='white')
-    handles = [empty] + ax1_handles
-    labels = ["+/-"] + ax1_labels
-
     ax1.set_xlabel("Distance from $5'$ end of $+$ strand", labelpad=10)
     if not args.only5p:
         ax2.set_xlabel("Distance from $3'$ end of $+$ strand", labelpad=10)
     ax1.set_ylabel("Frequency", labelpad=10)
 
-    leg = ax1.legend(handles, labels, numpoints=1, frameon=True, ncol=len(labels), loc='upper center', bbox_to_anchor=(1.01, -0.16))
+    ax1_handles,ax1_labels = ax1.get_legend_handles_labels()
+    empty = mpatches.Patch(color='white')
+    handles = [empty] + ax1_handles
+    labels = ["+/-"] + ax1_labels
+
+    def flip(items, ncol):
+        import itertools
+        return list(itertools.chain(*[items[i::ncol] for i in range(ncol)]))
+
+    if args.allpairs:
+        handles = [empty,empty,empty] + flip(ax1_handles, 6)
+        labels = ["+/-", "", ""] + flip(ax1_labels, 6)
+    else:
+        handles = [empty] + ax1_handles
+        labels = ["+/-"] + ax1_labels
+
+    leg = ax1.legend(handles, labels, numpoints=1, frameon=False, ncol=7, loc='upper center', bbox_to_anchor=(1.00, -0.16))
+    pm_text = leg.get_texts()[0]
+    pm_text.set_ha('center')
 
     if args.title:
         title = "Base pair frequencies ({})".format(args.title)
@@ -228,6 +245,10 @@ if __name__ == "__main__":
         title = "Base pair frequencies"
     fig1.suptitle(title, fontsize=int(np.sqrt(args.scale)*12))
 
-    plt.tight_layout(rect=[0, 0.06, 1, 0.95])
+    if args.allpairs:
+        plt.tight_layout(rect=[0, 0.15, 0.95, 0.95])
+    else:
+        plt.tight_layout(rect=[0, 0.06, 0.95, 0.95])
+
     pdf.savefig()
     pdf.close()
