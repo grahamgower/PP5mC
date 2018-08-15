@@ -1,5 +1,0 @@
-PP5mC is a pre-processing toolkit for recovering methylation state from
-hairpin-ligated bisulfite-treated sequencing data.
-
-# dependencies
-HTSLIB, python, matplotlib
