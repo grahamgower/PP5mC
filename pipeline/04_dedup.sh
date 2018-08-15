@@ -7,7 +7,7 @@ dedup() {
 	bam_in=${pfx}.bam
 	bam_out=${pfx}.dedup.bam
 
-	paleomix rmdup_collapsed \
+	rmdup_collapsed.py \
 		--remove-duplicates \
 		< $bam_in > $bam_out \
 	|| die "${pfx}: paleomix rmdup_collapsed"

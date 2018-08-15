@@ -9,7 +9,7 @@ scan() {
 	scanbp \
 		${bam} \
 		> ${pfx}.pairs.txt \
-		|| die "${pfx}: scan_pairs"
+		|| die "${pfx}: scanbp"
 
 	plot_nt_pairing.py \
 		--title ${pfx} \
