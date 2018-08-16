@@ -121,7 +121,7 @@ def parse_args():
     import argparse
     parser = argparse.ArgumentParser(description="HTML/LaTeXify HBS-seq fastq files")
     parser.add_argument("-u", "--unmethylated-hairpin", default=False, action="store_true", help="hairpin is BS-converted prior to sequencing [%(default)s]")
-    parser.add_argument("-n", "--nseqs", type=int, default=1000, help="only output this many sequences [(%default)s]")
+    parser.add_argument("-n", "--nseqs", type=int, default=1000, help="only output this many sequences [%(default)s]")
     parser.add_argument("-p", "--hairpin", action="append", help="hairpin sequence(s)")
     parser.add_argument("--latex", action="store_true", default=False, help="LaTeX output [%(default)s]")
     parser.add_argument("-i", "--interleaved", action="store_true", default=False, help="R1/R2 are interleaved in one fastq")
