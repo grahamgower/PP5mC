@@ -19,7 +19,7 @@
 from __future__ import print_function
 import sys
 import math
-from collections import Counter
+import cgi
 
 try:
     range = xrange
@@ -134,7 +134,9 @@ def parse_args():
     if args.hairpin is None:
         args.hairpin = ["ACGCCGGCGGCAAGTGAAGCCGCCGGCGT",
                         "ACGCCGGCGGCAAGTAAGCCGCCGGCGT",
-                        "ACGCCGGCGGCAAGTAGCCGCCGGCGT"]
+                        "ACGCCGGCGGCAAGTAGCCGCCGGCGT",
+                        "ACGCCGGCGGCAATGAAGCCGCCGGCGT",
+                        "ACGCCGGCGGCATGAAGCCGCCGGCGT"]
 
     if args.unmethylated_hairpin:
         args.hairpin = [h.replace("C", "T") for h in args.hairpin]
@@ -366,7 +368,7 @@ if __name__ == "__main__":
             print("R2", g(s2_list), "</br>")
             if ss is not None:
                 print("FS ", ss, "</br>")
-                print("FQ ", qq)
+                print("FQ ", cgi.escape(qq))
             print("</tt></p>")
 
     if args.latex:
