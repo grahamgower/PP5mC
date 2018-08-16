@@ -156,7 +156,8 @@ if __name__ == "__main__":
     ctx3p_pos = np.array(ctx3p_pos)+1
 
     plot_file = args.outfile
-    pdf = PdfPages(plot_file)
+    if plot_file.endswith("pdf"):
+        pdf = PdfPages(plot_file)
 
     if args.ratio4x3:
         fig_w, fig_h = plt.figaspect(3.0/4.0)
@@ -250,5 +251,8 @@ if __name__ == "__main__":
     else:
         plt.tight_layout(rect=[0, 0.06, 0.95, 0.95])
 
-    pdf.savefig()
-    pdf.close()
+    if plot_file.endswith("pdf"):
+        pdf.savefig()
+        pdf.close()
+    else:
+        plt.savefig(plot_file)

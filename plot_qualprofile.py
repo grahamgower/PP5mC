@@ -69,7 +69,9 @@ if __name__ == "__main__":
     else:
         X2 = V2 = Sigma2 = fn2 = None
 
-    pdf = PdfPages(sys.argv[1])
+    plot_file = sys.argv[1]
+    if plot_file.endswith("pdf"):
+        pdf = PdfPages(plot_file)
     fig_w, fig_h = plt.figaspect(9.0/16.0)
     scale = 1
     fig1 = plt.figure(figsize=(scale*fig_w, scale*fig_h))
@@ -89,7 +91,10 @@ if __name__ == "__main__":
     ax1.legend()
 
     plt.tight_layout()
-    pdf.savefig(figure=fig1)
+    if plot_file.endswith("pdf"):
+        pdf.savefig(figure=fig1)
+    else:
+        plt.savefig(plot_file[:-4]+"-1"+plot_file[-4:])
 
     # next page
     fig2 = plt.figure(figsize=(scale*fig_w, scale*fig_h))
@@ -101,7 +106,10 @@ if __name__ == "__main__":
     ax1.set_title("Covariance matrix ({})".format(fn1))
 
     plt.tight_layout()
-    pdf.savefig(figure=fig2)
+    if plot_file.endswith("pdf"):
+        pdf.savefig(figure=fig2)
+    else:
+        plt.savefig(plot_file[:-4]+"-2"+plot_file[-4:])
 
     if Sigma2 is not None:
         # next page
@@ -114,6 +122,10 @@ if __name__ == "__main__":
         ax1.set_title("Covariance matrix ({})".format(fn2))
 
         plt.tight_layout()
-        pdf.savefig(figure=fig3)
+        if plot_file.endswith("pdf"):
+            pdf.savefig(figure=fig3)
+        else:
+            plt.savefig(plot_file[:-4]+"-3"+plot_file[-4:])
 
-    pdf.close()
+    if plot_file.endswith("pdf"):
+        pdf.close()
