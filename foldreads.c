@@ -553,8 +553,8 @@ usage(char *argv0)
 	fprintf(stderr, " -P SEQ            The hairpin SEQ (unmethylated and will be C->T converted)\n");
 	fprintf(stderr, " -1 IN1.FQ[.GZ]    R1 fastq input file\n");
 	fprintf(stderr, " -2 IN2.FQ[.GZ]    R2 fastq input file\n");
-	fprintf(stderr, " -T SEQ            Adapter SEQuence trailing R1 (p7) []\n");
-	fprintf(stderr, " -B SEQ            Adapter SEQuence trailing R2 (p5) []\n");
+	fprintf(stderr, " -T SEQ            Adapter SEQuence trailing R1 (p7) [AGATCGGAAGAGCACACG...]\n");
+	fprintf(stderr, " -B SEQ            Adapter SEQuence trailing R2 (p5) [AGATCGGAAGAGCGTCGT...]\n");
 	exit(-1);
 }
 
