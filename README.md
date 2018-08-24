@@ -27,8 +27,8 @@ Clone the git repository, then build with `make`.  You may wish to edit
 the `Makefile` to statically link with htslib, and/or to specify its path.
 
 # Usage
-The [shell script pipeline](pipeline/) for unix workstations implements a
-minimal working pipeline that:
+A [shell script pipeline](pipeline/) for unix workstations is provided which
+implements a minimal working pipeline that:
 (1) reconstructs reads with `foldreads`;
 (2) aligns reconstructed reads with `bwa mem -C`;
 (3) merges different libraries for the same sample;
@@ -125,7 +125,7 @@ reads that were successfully reconstructed with `foldreads`, try:
 $ fq2html.py -n 25 SRR919306.folded.fq.gz > SRR919306.folded.html
 ```
 
-Which produces [this output](extra/SRR919306.folded.html), where
+Which produces [this output](http://htmlpreview.github.io/?https://github.com/grahamgower/PP5mC/blob/master/extra/SRR919306.folded.html), where
 **R1** and **R2** are the original reads sequenced, **FS** is the sequence
 reconstructed with `foldreads`, and **FQ** are the quality scores for
 reconstructed bases.  Here is a key to the font type/colour in the output:
@@ -150,7 +150,7 @@ are unmethylated, so the `-u` flag was used).
 $ fq2html.py -n 25 -u -p ACGCCGGCGGCAAGTGAAGCCGCCGGCGT SRR919306.unfolded_r1.fq SRR919306.unfolded_r2.fq > SRR919306.unfolded.html
 ```
 
-The output from [reads which could not be folded](extra/SRR919306.unfolded.html)
+The output from [reads which could not be folded](http://htmlpreview.github.io/?https://github.com/grahamgower/PP5mC/blob/master/extra/SRR919306.unfolded.html)
 show large numbers of mismatches, and may indicate non-canonical HBS-seq
 molecules, such as adapter dimers or molecules with Y-adapters ligated
 to both ends.
@@ -285,7 +285,7 @@ $ ./qualprofile illumina-nextseq-r1.fastq.gz > profile.INS.r1.txt
 $ ./qualprofile illumina-nextseq-r2.fastq.gz > profile.INS.r2.txt
 ```
 
-The profiles are human readable, but can be plotted to show the mean quality
+The profiles can be plotted to show the mean quality
 scores along the reads, with ribbons representing one standard deviation
 either side of the mean, and heatmaps showing the covariance of quality
 scores in different positions.
@@ -295,8 +295,8 @@ $ ./plot_qualprofile.py profile.INS.pdf profile.INS.r1.txt profile.INS.r2.txt
 
 ![](extra/profile-INS-1.svg)
 
-![](extra/profile-INS-2.svg)
-![](extra/profile-INS-3.svg)
+![](extra/profile-INS-2.png)
+![](extra/profile-INS-3.png)
 
 The `-E` parameter to `simhbs` can be used to simulate quality scores by
 sampling from a multivariate normal distribution for each read

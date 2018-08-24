@@ -797,7 +797,7 @@ main(int argc, char **argv)
 	// seed the random state
 	opt.state = kr_srand(time(NULL));
 
-	while ((c = getopt(argc, argv, "b:e:E:m:n:o:u:s:")) != -1) {
+	while ((c = getopt(argc, argv, "b:e:E:m:n:o:r:s:u:")) != -1) {
 		switch (c) {
 			case 'b':
 				opt.bs_rate = atof(optarg);
