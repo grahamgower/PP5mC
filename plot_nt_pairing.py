@@ -231,10 +231,10 @@ if __name__ == "__main__":
 
     if args.allpairs:
         handles = [empty,empty,empty] + flip(ax1_handles, 6)
-        labels = ["+/-", "", ""] + flip(ax1_labels, 6)
+        labels = ["$+$/$-$", "", ""] + flip(ax1_labels, 6)
     else:
         handles = [empty] + ax1_handles
-        labels = ["+/-"] + ax1_labels
+        labels = ["$+$/$-$"] + ax1_labels
 
     leg = ax1.legend(handles, labels, numpoints=1, frameon=False, ncol=7, loc='upper center', bbox_to_anchor=(1.00, -0.16))
     pm_text = leg.get_texts()[0]
