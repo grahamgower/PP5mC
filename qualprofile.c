@@ -93,15 +93,17 @@ qualprofile(char *fn)
 		 * estimates are biased low.  Possible solutions:
 		 * https://stats.stackexchange.com/questions/58081/pre-truncation-moments-for-truncated-multivariate-normal
 		 *
-		 * Cumulative mean and covariance adapted from
-		 * Knuth TAOCP vol 2, 3rd edition, p 232.
+		 * Single pass covariance estimator from
+		 * Eq III.9; Bennett et al. 2009, DOI: 10.1109/CLUSTR.2009.5289161
 		 */
 		for (i=0; i<qlen; i++) {
+			double x;
 			double qi = seq->qual.s[i];
 			mu[i] += (qi - mu[i]) / nseqs;
+			x = (qi - mu[i]) * (nseqs-1.0) / nseqs;
 			for (j=0; j<=i; j++) {
 				double qj = seq->qual.s[j];
-				Sigma[i*qlen+j] += (qj - mu[j]) * (qi - mu[i]);
+				Sigma[i*qlen+j] += x * (qj - mu[j]);
 			}
 		}
 	}
