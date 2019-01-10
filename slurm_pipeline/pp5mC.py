@@ -53,6 +53,12 @@ def filecheck(fn):
         raise OSError(os.errno.EACCES, os.strerror(os.errno.EACCES), fn)
     return True
 
+def has_deps(deps):
+    if deps is None:
+        return False
+    if isinstance(deps, list) and all(d is None for d in deps):
+        return False
+    return True
 
 def do_fold(p, rd, jobsize, sample, lib, runid, r1, r2):
     odir = "{}/{}".format(sample, lib)
@@ -93,7 +99,9 @@ def do_map(p, rd, jobsize, sample, lib, runid, refid, ref, deps):
     bam = "{}.{}.bam".format(opfx, refid)
     bai = "{}.bai".format(bam)
 
-    if os.path.exists(bam) and os.path.exists(bai):
+    if os.path.exists(bam) and os.path.exists(bai) and \
+       os.path.getctime(bam) > os.path.getctime(fastq) and \
+       not has_deps(deps):
         ret = subprocess.call(["samtools", "quickcheck", bam])
         if ret == 0:
             # nothing to do
@@ -151,15 +159,28 @@ def do_merge_runs(p, rd, jobsize, sample, lib, runid_list, refid, deps):
     obam = "{}.bam".format(opfx)
     obai = "{}.bai".format(obam)
 
-    if os.path.exists(obam) and os.path.exists(obai):
-        ret = subprocess.call(["samtools", "quickcheck", obam])
-        if ret == 0:
-            # check header for the expected readgroups
-            exp_rgs = {"{}_{}_{}".format(sample,lib,r) for r in runid_list}
-            hdr_rgs = bam2rgids(obam)
-            if hdr_rgs == exp_rgs:
-                # nothing to do
-                return None, obam
+    # merge list
+    ibamlist = []
+    for runid in runid_list:
+        rpfx = "{}_{}_{}".format(sample, lib, runid)
+        rbam = "{}/{}.{}.bam".format(odir, rpfx, refid)
+        if os.path.exists(rbam):
+            ibamlist.append(rbam)
+
+    if os.path.exists(obam) and os.path.exists(obai) and \
+       not has_deps(deps):
+        for ibam in ibamlist:
+            if os.path.getctime(obam) < os.path.getctime(ibam):
+                break
+        else:
+            ret = subprocess.call(["samtools", "quickcheck", obam])
+            if ret == 0:
+                # check header for the expected readgroups
+                exp_rgs = {"{}_{}_{}".format(sample,lib,r) for r in runid_list}
+                hdr_rgs = bam2rgids(obam)
+                if hdr_rgs == exp_rgs:
+                    # nothing to do
+                    return None, obam
 
     if len(runid_list) == 1:
         # nothing to merge, just symlink
@@ -171,13 +192,6 @@ def do_merge_runs(p, rd, jobsize, sample, lib, runid_list, refid, deps):
         os.symlink(rbai, obai)
         # pass through dependencies
         return deps, obam
-
-    # merge list
-    ibamlist = []
-    for runid in runid_list:
-        rpfx = "{}_{}_{}".format(sample, lib, runid)
-        rbam = "{}/{}.{}.bam".format(odir, rpfx, refid)
-        ibamlist.append(rbam)
 
     res = Resource(rd["03:mergeruns"], jobsize)
     j = p.new_job("03:mergeruns:{}".format(pfx), res, force=True)
@@ -201,7 +215,9 @@ def do_dedup(p, rd, jobsize, sample, lib, refid, deps):
     obam = "{}.dedup.bam".format(opfx)
     obai = "{}.bai".format(obam)
 
-    if os.path.exists(obam) and os.path.exists(obai):
+    if os.path.exists(obam) and os.path.exists(obai) and \
+       os.path.getctime(obam) > os.path.getctime(ibam) and \
+       not has_deps(deps):
         ret = subprocess.call(["samtools", "quickcheck", obam])
         if ret == 0:
             # nothing to do
@@ -231,18 +247,30 @@ def do_merge_libs(p, rd, jobsize, sample, lib_list, sl_info, refid, deps):
     obam = "{}.bam".format(opfx)
     obai = "{}.bai".format(obam)
 
-    if os.path.exists(obam) and os.path.exists(obai):
-        ret = subprocess.call(["samtools", "quickcheck", obam])
-        if ret == 0:
-            # check header for the expected readgroups
-            exp_rgs = set()
-            for lib in lib_list:
-                for runid in sl_info[(sample,lib)]:
-                    exp_rgs.add("{}_{}_{}".format(sample, lib, runid))
-            hdr_rgs = bam2rgids(obam)
-            if hdr_rgs == exp_rgs:
-                # nothing to do
-                return None, obam
+    # merge list
+    ibamlist = []
+    for lib in lib_list:
+        lbam = "{}/{}/{}_{}.{}.dedup.bam".format(sample, lib, sample, lib, refid)
+        if os.path.exists(lbam):
+            ibamlist.append(lbam)
+
+    if os.path.exists(obam) and os.path.exists(obai) and \
+       not has_deps(deps):
+        for ibam in ibamlist:
+            if os.path.getctime(obam) < os.path.getctime(ibam):
+                break
+        else:
+            ret = subprocess.call(["samtools", "quickcheck", obam])
+            if ret == 0:
+                # check header for the expected readgroups
+                exp_rgs = set()
+                for lib in lib_list:
+                    for runid in sl_info[(sample,lib)]:
+                        exp_rgs.add("{}_{}_{}".format(sample, lib, runid))
+                hdr_rgs = bam2rgids(obam)
+                if hdr_rgs == exp_rgs:
+                    # nothing to do
+                    return None, obam
 
     if len(lib_list) == 1:
         # nothing to merge, just symlink
@@ -254,12 +282,6 @@ def do_merge_libs(p, rd, jobsize, sample, lib_list, sl_info, refid, deps):
         os.symlink(lbai, obai)
         # pass through dependencies
         return deps, obam
-
-    # merge list
-    ibamlist = []
-    for lib in lib_list:
-        lbam = "{}/{}/{}_{}.{}.dedup.bam".format(sample, lib, sample, lib, refid)
-        ibamlist.append(lbam)
 
     res = Resource(rd["05:mergelibs"], jobsize)
     j = p.new_job("05:mergelibs:{}".format(pfx), res, force=True)
@@ -288,7 +310,9 @@ def do_indel_realign(p, rd, jobsize, sample, refid, ref, deps):
     obam2 = "{}.{}.bam".format(sample, refid)
     obai2 = "{}.bai".format(obam2)
 
-    if os.path.exists(obam2) and os.path.exists(obai2):
+    if os.path.exists(obam2) and os.path.exists(obai2) and \
+       os.path.getctime(obam2) > os.path.getctime(ibam) and \
+       not has_deps(deps):
         ret = subprocess.call(["samtools", "quickcheck", obam2])
         if ret == 0:
             # nothing to do
@@ -353,7 +377,9 @@ def do_mark_5mC(p, rd, jobsize, sample, refid, ref, deps):
                 break
         if skip == False:
             break
-    if os.path.exists(methlist) and skip:
+    if os.path.exists(methlist) and skip and \
+       os.path.getctime(methlist) > os.path.getctime(ibam) and \
+       not has_deps(deps):
         # all files present, nothing to do
         return None
 
@@ -387,7 +413,9 @@ def do_scanbp(p, rd, jobsize, sample, refid, ref, deps):
     pairs_txt = "{}.pairs.txt".format(pfx)
     pairs_pdf = "{}.pairs.pdf".format(pfx)
 
-    if os.path.exists(pairs_txt) and os.path.exists(pairs_pdf):
+    if os.path.exists(pairs_txt) and os.path.exists(pairs_pdf) and \
+       os.path.getctime(pairs_txt) > os.path.getctime(ibam) and \
+       not has_deps(deps):
         # all files present, nothing to do
         return None
 
@@ -411,7 +439,9 @@ def do_scanbp(p, rd, jobsize, sample, refid, ref, deps):
 def do_samtools_flagstat(p, rd, jobsize, pfx, bam, deps):
     flagstat = "{}.flagstat.txt".format(bam)
 
-    if os.path.exists(flagstat):
+    if os.path.exists(flagstat) and \
+       os.path.getctime(flagstat) > os.path.getctime(bam) and \
+       not has_deps(deps):
         return None
 
     res = Resource(rd["09:flagstat"], jobsize)
@@ -426,7 +456,11 @@ def do_samtools_stats(p, rd, jobsize, pfx, bam, deps):
     stats_aut = "{}.stats.Aut.txt".format(bam)
     stats_X = "{}.stats.chrX.txt".format(bam)
 
-    if os.path.exists(stats_mt) and os.path.exists(stats_aut) and os.path.exists(stats_X):
+    if os.path.exists(stats_mt) and os.path.exists(stats_aut) and os.path.exists(stats_X) and \
+       os.path.getctime(stats_mt) > os.path.getctime(bam) and \
+       os.path.getctime(stats_aut) > os.path.getctime(bam) and \
+       os.path.getctime(stats_X) > os.path.getctime(bam) and \
+       not has_deps(deps):
         return None
 
     res = Resource(rd["10:stats"], jobsize)
@@ -451,7 +485,9 @@ def do_samtools_bedcov(p, rd, jobsize, pfx, ref_fa, bam, deps):
     bed = "{}.bed.tmp".format(bam)
     bedcov = "{}.bedcov.txt".format(bam)
 
-    if os.path.exists(bedcov):
+    if os.path.exists(bedcov) and \
+       os.path.getctime(bedcov) > os.path.getctime(bam) and \
+       not has_deps(deps):
         return None
 
     res = Resource(rd["11:bedcov"], jobsize)
