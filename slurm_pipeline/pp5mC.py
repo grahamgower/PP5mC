@@ -164,12 +164,13 @@ def do_merge_runs(p, rd, jobsize, sample, lib, runid_list, refid, deps):
     for runid in runid_list:
         rpfx = "{}_{}_{}".format(sample, lib, runid)
         rbam = "{}/{}.{}.bam".format(odir, rpfx, refid)
-        if os.path.exists(rbam):
-            ibamlist.append(rbam)
+        ibamlist.append(rbam)
 
     if os.path.exists(obam) and os.path.exists(obai) and \
        not has_deps(deps):
         for ibam in ibamlist:
+            if not os.path.exists(ibam):
+                continue
             if os.path.getctime(obam) < os.path.getctime(ibam):
                 break
         else:
@@ -251,12 +252,13 @@ def do_merge_libs(p, rd, jobsize, sample, lib_list, sl_info, refid, deps):
     ibamlist = []
     for lib in lib_list:
         lbam = "{}/{}/{}_{}.{}.dedup.bam".format(sample, lib, sample, lib, refid)
-        if os.path.exists(lbam):
-            ibamlist.append(lbam)
+        ibamlist.append(lbam)
 
     if os.path.exists(obam) and os.path.exists(obai) and \
        not has_deps(deps):
         for ibam in ibamlist:
+            if not os.path.exists(ibam):
+                continue
             if os.path.getctime(obam) < os.path.getctime(ibam):
                 break
         else:
