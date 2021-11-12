@@ -3,6 +3,33 @@
 PP5mC is a pre-processing toolkit for calling 5-methylcytosines (5mC),
 from hairpin bisulfite sequencing (HBS-seq) data.
 
+This software was developed while I was a PhD student at the University of Adelaide.
+The results have not appeared in a publication, but interested readers are enouraged
+to read chapter 5 from my PhD thesis.
+
+Gower, G (2019), https://hdl.handle.net/2440/120205
+
+# Abstract
+
+Ligation of a hairpin adapter onto double stranded DNA enables simultaneous
+sequencing of the top and bottom strands. This is a useful precursor
+step to bisulfite sequencing as the original four nucleotide states can be
+recovered prior to mapping, in addition to the cytosine methylation status.
+PP5mC is a collection of tools written in C for processing hairpin-ligated
+bisulfite-treated sequencing data prior to analysis. We provide shell scripts
+implementing a basic pipeline for use on Unix workstations, and a more
+sophisticated pipeline written in Python for compute clusters using the Slurm job
+manager. Pipeline stages include: reconstruction of original nucleotide sequences
+from paired-end reads (`foldreads`); alignment to a reference, PCR
+deduplication, and indel realignment; recording nucleotide pairing statistics
+for positions upstream, within, and downstream of aligned reads (`scanbp`);
+and counting methylated/unmethylated cytosines at all CpG, CHG, and CHH
+contexts covered by alignments (`mark5mC`). PP5mC also includes a read simulator
+(`simhbs`) for hairpin and regular non-hairpin bisulfite sequencing, which
+we use to show that `foldreads` reconstructs sequences with greater accuracy,
+and is an order of magnitude faster, than HBS-tools, the only comparable
+software.
+
 # Prerequisites
 The core parts of PP5mC are written in C, and thus requires a C compiler
 (tested with **GCC v5.5.0**).  The Slurm pipeline, and several helper scripts,
